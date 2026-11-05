@@ -20,6 +20,10 @@
 ## Amendments
 
 - 2026-11-05：§5 的自助改密语义由 ADR-0003 修订——自助改密保留当前会话，撤销其他会话并递增 `token_version`，为当前会话重签 access token；管理员重置凭据与停用用户仍撤销全部会话并递增 `token_version`。v1 不提供用户删除。
+- 2026-11-05：§3 的 grace 实现明确为派生式刷新令牌——`new_raw = base64url(HMAC-SHA256(refresh_derivation_key, old_raw || ":" || rotation_counter))`；数据库仍只存 SHA-256；`auth_refresh_tokens` 记录 `rotation_counter` 与 `replaced_by_hash`；重试时沿链现算后继并返回当前有效令牌；派生密钥独立于 JWT 签名密钥，轮换时旧密钥至少保留 grace 窗口；客户端必须单飞刷新（见 ADR-0004）。
+- 2026-11-05：§4 的「每用户最多 5 个活跃会话」明确为第 6 次登录自动撤销最旧会话（按 `last_seen_at`）并写审计 `authn_session_evicted`；`last_seen_at` 与 idle 截止时间最多每 60 秒更新一次。
+- 2026-11-05：§5 补充管理员会话撤销——`DELETE /users/{id}/sessions` 撤销目标用户全部会话并递增 `token_version`；管理员不得对自己执行该操作（走 `/auth/logout-all`）。自助改密在保留当前会话的同时轮换其 refresh token（见 ADR-0004）。
+- 2026-11-05：引入 step-up 重新认证（见 ADR-0005 §5）——access token claims 增加 `auth_time`（Unix 秒，最近一次密码认证时间；refresh 时从 `auth_sessions.authenticated_at` 复制，不重置）；`auth_sessions` 增加 `authenticated_at`；敏感操作要求最近 300 秒认证，新增 `POST /auth/reauthenticate` 与 403 `reauth_required`。step-up 校验以数据库会话列为准，`auth_time` claim 仅供前端预判。
 
 ## Consequences
 

@@ -168,6 +168,21 @@
 - 「部署、可观测与 CI」决定：实际域名/证书/网关、健康检查与 metrics、CI、容量/SLO、审计日志保留与清理。
 - 「前端认证集成与路由守卫」「前端裁剪与中英 i18n」「Users 页面真实 CRUD 集成」「角色管理 API 与 UI」「审计日志查询 UI」决定 UI 细节与错误码本地化映射；API 契约以本 ADR 为准。
 
+## Amendments
+
+- 2026-11-05：安全基线（ADR-0005）修订：
+  - `users` 增加 `last_failed_login_at timestamptz`（账号层失败计数 24 小时衰减）。
+  - `auth_sessions` 增加 `authenticated_at timestamptz NOT NULL`（step-up 的权威时间）。
+  - `audit_logs` 增加 `severity`、`chain_seq`、`prev_hash`、`row_hash`、`hmac_key_id`；新增 `audit_chain_head`；运行角色对 `audit_logs` 仅 `INSERT`/`SELECT`，清理用独立角色；保留期按 severity 分层（ADR-0005 §6.3）。
+  - 新增 `auth_login_throttle(scope IN ('ip','global'), key_hash, window_start, failures, locked_until, last_failure_at)`；`users` 账号计数器与 `auth_login_failures` 保留（ADR-0005 §3）。
+  - `AuditLogSummary` 增加 `severity`；`GET /audit-logs` 增加可选 `severity` 过滤。
+  - 新增 `POST /auth/reauthenticate`（operationId `reauthenticate`，Bearer，请求 `{password}`，响应 `{access_token, token_type, expires_in, auth_time}`）；错误码目录增加 `reauth_required`；认证端点表与 OpenAPI 同步。
+  - 审计事件目录与 `details` 以 ADR-0005 §6 为准；`request_id` 即 trace_id；审计访问详情写 `audit_log_accessed`。
+  - 密码策略细节（离线 blocklist 100k、128 码点输入上限）按 ADR-0005 §1–2 细化；`users`/API schema 不变。
+  - 安全响应头、CORS、CSP、密钥与日志契约见 ADR-0005 §7–9。
+  - §10 中「审计日志保留与清理」的保留期与清理策略改由 ADR-0005 §6.3 决定；「部署、可观测与 CI」只负责执行、监控与外部归档评估。
+- 2026-11-05：`auth_time` claim 与 `auth_sessions.authenticated_at` 由 ADR-0001 的修订引入。
+
 ## Consequences
 
 - **正面**：前后端共享一份稳定、可生成的契约；错误码可本地化且可测试；offset 分页与显式筛选易于实现；UUIDv7 + timestamptz + 规范化标识让索引与审计稳定；派生式 refresh 在只存哈希的前提下满足 grace 幂等；管理范围覆盖读取，避免管理员看到无权管理的用户。

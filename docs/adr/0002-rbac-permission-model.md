@@ -22,6 +22,8 @@
 ## Amendments
 
 - 2026-11-05：权限目录新增 `users.unlock`，内置 `admin` 权限集包含该项（见 ADR-0003）；普通管理员只能解锁不持有 `admin`/`super_admin` 角色的其他用户，超级管理员可解锁任意用户，任何人不得解锁自己。自助操作措辞统一为「显示名与密码」；v1 不提供用户删除。
+- 2026-11-05：§4 的管理范围适用于 users 的读取端点——列表按范围过滤（`total` 为过滤后数量），self 始终可见/可读；详情与管理动作对范围外目标返回 403 `out_of_scope`；管理动作对自己返回 403 `self_action_forbidden`；超级管理员不受范围限制（见 ADR-0004）。
+- 2026-11-05：§8 的前端门控补充——`GET /roles` 不按范围隐藏，返回 `assignable`/`manageable` 标志；`GET /permissions` 返回完整目录与 `grantable` 标志；`GET /audit-logs` 持有 `audit.read` 即可查看全部，不按管理范围过滤；服务端始终以权限与范围规则为准（见 ADR-0004）。
 
 ## Consequences
 

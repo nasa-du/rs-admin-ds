@@ -6,6 +6,7 @@
 
 mod auth;
 mod error;
+mod json;
 mod logging;
 mod metrics;
 mod middleware;

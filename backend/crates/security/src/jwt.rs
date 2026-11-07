@@ -102,12 +102,27 @@ impl JwtIssuer {
         &self.signing_key
     }
 
-    pub fn issuer(&self) -> &str {
-        &self.issuer
-    }
-
-    pub fn audience(&self) -> &str {
-        &self.audience
+    /// Build and sign an access token with this issuer's identity. Returns the
+    /// claims as well so callers do not need to rebuild them.
+    pub fn sign_access_token(
+        &self,
+        sub: Uuid,
+        sid: Uuid,
+        ver: i64,
+        auth_time: i64,
+        issued_at: i64,
+    ) -> Result<(String, AccessTokenClaims), JwtError> {
+        let claims = AccessTokenClaims::new(
+            sub,
+            sid,
+            ver,
+            auth_time,
+            &self.issuer,
+            &self.audience,
+            issued_at,
+        );
+        let token = self.sign(&claims)?;
+        Ok((token, claims))
     }
 
     /// Sign a claim set with the `at+jwt` header and configured `kid`.

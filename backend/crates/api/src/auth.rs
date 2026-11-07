@@ -7,6 +7,7 @@
 //! client's memory and never persisted.
 
 use crate::error::ApiError;
+use crate::json::ApiJson;
 use crate::middleware::RequestId;
 use crate::router::AppState;
 use axum::Extension;
@@ -26,9 +27,9 @@ use rs_admin_domain::identity::{Email, Username};
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleGrant};
 use rs_admin_security::{
-    AccessTokenClaims, HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError,
-    PasswordService, TokenError, exceeds_authentication_limit, generate_refresh_token,
-    hash_refresh_token, identifier_hmac_hex,
+    HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError, PasswordService, TokenError,
+    VerifyOutcome, exceeds_authentication_limit, generate_refresh_token, hash_refresh_token,
+    identifier_hmac_hex,
 };
 use rs_admin_store::Database;
 use rs_admin_store::audit::transaction_now;
@@ -277,7 +278,7 @@ pub async fn login(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
-    Json(payload): Json<LoginRequest>,
+    ApiJson(payload): ApiJson<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let user_agent = user_agent(&headers);
@@ -286,37 +287,8 @@ pub async fn login(
 
     let user = find_user(&state.database, normalized.as_ref()).await?;
 
-    // Over-long authentication inputs still pay for a dummy verification so
-    // they cannot be distinguished from any other failed attempt.
-    let over_limit = exceeds_authentication_limit(&payload.password);
-    let outcome = if over_limit {
-        services
-            .passwords
-            .verify_dummy()
-            .await
-            .map_err(password_unavailable)?;
-        None
-    } else {
-        match &user {
-            Some(user) => Some(
-                services
-                    .passwords
-                    .verify(&payload.password, &user.password_hash)
-                    .await
-                    .map_err(password_unavailable)?,
-            ),
-            None => {
-                services
-                    .passwords
-                    .verify_dummy()
-                    .await
-                    .map_err(password_unavailable)?;
-                None
-            }
-        }
-    };
-
-    let password_matches = !over_limit && outcome.as_ref().is_some_and(|outcome| outcome.valid);
+    let outcome = verify_password(services, &payload.password, user.as_ref()).await?;
+    let password_matches = outcome.as_ref().is_some_and(|outcome| outcome.valid);
 
     match (user, password_matches) {
         (Some(user), true) => {
@@ -348,11 +320,13 @@ pub async fn login(
             Err(ApiError::new(ErrorCode::InvalidCredentials))
         }
         (None, _) => {
-            // Throttle state is keyed by the normalized identifier so that
-            // case and Unicode variants cannot be used to rotate the key.
+            // Throttle state is keyed by the normalized identifier when it
+            // parses, otherwise by the trimmed input, so that case and Unicode
+            // variants cannot be used to rotate the key.
             let hmac_identifier = match &normalized {
-                Some(LoginIdentifier::Username(username))
-                | Some(LoginIdentifier::Email(username)) => username.clone(),
+                Some(LoginIdentifier::Username(value)) | Some(LoginIdentifier::Email(value)) => {
+                    value.clone()
+                }
                 None => identifier.clone(),
             };
             record_unknown_login_failure(
@@ -460,7 +434,7 @@ pub async fn reauthenticate(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     principal: Authenticated,
-    Json(payload): Json<ReauthenticateRequest>,
+    ApiJson(payload): ApiJson<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     if principal.user.must_change_password {
@@ -468,25 +442,8 @@ pub async fn reauthenticate(
     }
     let user_agent = user_agent(&headers);
 
-    let over_limit = exceeds_authentication_limit(&payload.password);
-    let outcome = if over_limit {
-        services
-            .passwords
-            .verify_dummy()
-            .await
-            .map_err(password_unavailable)?;
-        None
-    } else {
-        Some(
-            services
-                .passwords
-                .verify(&payload.password, &principal.user.password_hash)
-                .await
-                .map_err(password_unavailable)?,
-        )
-    };
-
-    if over_limit || !outcome.as_ref().is_some_and(|outcome| outcome.valid) {
+    let outcome = verify_password(services, &payload.password, Some(&principal.user)).await?;
+    if !outcome.as_ref().is_some_and(|outcome| outcome.valid) {
         record_failed_reauth(&state, services, &principal.user, request_id.0, user_agent).await?;
         return Err(ApiError::new(ErrorCode::InvalidCurrentPassword));
     }
@@ -562,18 +519,15 @@ pub async fn reauthenticate(
     transaction.commit().await.map_err(dependency_unavailable)?;
 
     let issued_at = Utc::now().timestamp();
-    let claims = AccessTokenClaims::new(
-        locked.id,
-        principal.session.id,
-        locked.token_version,
-        authenticated_at.timestamp(),
-        services.jwt.issuer(),
-        services.jwt.audience(),
-        issued_at,
-    );
-    let access_token = services
+    let (access_token, _claims) = services
         .jwt
-        .sign(&claims)
+        .sign_access_token(
+            locked.id,
+            principal.session.id,
+            locked.token_version,
+            authenticated_at.timestamp(),
+            issued_at,
+        )
         .map_err(|error| internal_error("access token signing failed", error))?;
 
     Ok(Json(ReauthenticateResponse {
@@ -582,6 +536,43 @@ pub async fn reauthenticate(
         expires_in: JWT_ACCESS_TOKEN_TTL_SECONDS,
         auth_time: authenticated_at.timestamp(),
     }))
+}
+
+/// Verify a login or reauthentication password. Unknown identifiers and
+/// over-long inputs pay for a dummy Argon2 verification so the response cannot
+/// reveal whether the account exists; a known identifier pays for exactly one
+/// verification against its stored hash.
+async fn verify_password(
+    services: &AuthServices,
+    password: &str,
+    user: Option<&AuthUser>,
+) -> Result<Option<VerifyOutcome>, ApiError> {
+    if exceeds_authentication_limit(password) {
+        services
+            .passwords
+            .verify_dummy()
+            .await
+            .map_err(password_unavailable)?;
+        return Ok(None);
+    }
+
+    match user {
+        Some(user) => Ok(Some(
+            services
+                .passwords
+                .verify(password, &user.password_hash)
+                .await
+                .map_err(password_unavailable)?,
+        )),
+        None => {
+            services
+                .passwords
+                .verify_dummy()
+                .await
+                .map_err(password_unavailable)?;
+            Ok(None)
+        }
+    }
 }
 
 async fn find_user(
@@ -749,18 +740,15 @@ async fn complete_login(
 
     transaction.commit().await.map_err(dependency_unavailable)?;
 
-    let claims = AccessTokenClaims::new(
-        locked.id,
-        session_id,
-        locked.token_version,
-        authenticated_at.timestamp(),
-        services.jwt.issuer(),
-        services.jwt.audience(),
-        Utc::now().timestamp(),
-    );
-    let access_token = services
+    let (access_token, _claims) = services
         .jwt
-        .sign(&claims)
+        .sign_access_token(
+            locked.id,
+            session_id,
+            locked.token_version,
+            authenticated_at.timestamp(),
+            Utc::now().timestamp(),
+        )
         .map_err(|error| internal_error("access token signing failed", error))?;
 
     let body = LoginResponse {
@@ -938,6 +926,8 @@ fn resolve_effective_permissions(roles: &[UserRole]) -> EffectivePermissions {
             _ => custom.push(
                 role.permission_keys
                     .iter()
+                    // Catalog entries removed in a later release may still be
+                    // persisted (sync never deletes them); they grant nothing.
                     .filter_map(|key| PermissionKey::from_str(key).ok())
                     .collect(),
             ),

@@ -9,7 +9,8 @@ use auth_support::{
     token_verifier,
 };
 use axum::Router;
-use axum::http::{StatusCode, header};
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
 use chrono::{DateTime, Duration, Utc};
 use rs_admin_audit::verify_chain;
 use rs_admin_security::hash_refresh_token;
@@ -708,6 +709,64 @@ async fn authentication_events_keep_the_audit_chain_verifiable(pool: PgPool) {
         .expect("count");
     assert_eq!(verification.verified_rows, stored as u64);
     assert_eq!(verification.head_seq, stored);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn request_validation_follows_the_problem_contract(pool: PgPool) {
+    let app = app(&pool).await;
+
+    let (status, _headers, body) = send(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/auth/login",
+            &serde_json::json!({
+                "identifier": "alice",
+                "password": "whatever",
+                "unexpected": true
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(problem_code(&json(&body)), "unknown_field");
+
+    let (status, _headers, body) = send(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/auth/login",
+            &serde_json::json!({ "identifier": "alice" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json(&body);
+    assert_eq!(problem_code(&body), "validation_failed");
+    assert_eq!(body["errors"][0]["pointer"], "/password");
+    assert_eq!(body["errors"][0]["code"], "required");
+
+    let (status, _headers, body) = send(
+        app.clone(),
+        json_request(
+            "POST",
+            "/api/v1/auth/login",
+            &serde_json::json!({ "identifier": "alice", "password": 123 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(problem_code(&json(&body)), "validation_failed");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(Body::from(r#"{"identifier":"alice","password":"x"}"#))
+        .expect("request");
+    let (status, _headers, body) = send(app, request).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(problem_code(&json(&body)), "unsupported_media_type");
 }
 
 #[sqlx::test(migrations = "../../migrations")]

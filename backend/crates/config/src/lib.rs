@@ -1,7 +1,14 @@
-//! Configuration loading and validation.
+//! Configuration loading and startup validation.
 //!
 //! Secrets are read from `*_FILE` first and fall back to the corresponding
 //! environment variable. Error messages name the key but never echo values.
+
+mod keys;
+mod secret;
+mod settings;
+
+pub use keys::{AuditChainConfig, JwtConfig, RotationKeys, SecurityConfig};
+pub use settings::{AuditSettings, AuthSettings};
 
 use ipnet::IpNet;
 use secrecy::{ExposeSecret, SecretString};
@@ -66,8 +73,7 @@ impl DatabaseConfig {
         F: Fn(&str) -> Option<String>,
     {
         let app_env = parse_app_env(&lookup)?;
-        let url =
-            read_secret(&lookup, "DATABASE_URL")?.ok_or(ConfigError::Missing("DATABASE_URL"))?;
+        let url = secret::required_secret(&lookup, "DATABASE_URL", "DATABASE_URL_FILE")?;
         validate_database_url(&url, app_env)?;
         let pool = PoolConfig::from_source(&lookup)?;
 
@@ -163,6 +169,9 @@ pub struct Config {
     pub server: ServerConfig,
     pub origins: OriginConfig,
     pub trusted_proxy_cidrs: Vec<IpNet>,
+    pub security: SecurityConfig,
+    pub auth: AuthSettings,
+    pub audit: AuditSettings,
 }
 
 impl Config {
@@ -192,6 +201,10 @@ impl Config {
         )?;
         let trusted_proxy_cidrs = parse_cidrs(&required(&lookup, "TRUSTED_PROXY_CIDRS")?)?;
 
+        let security = SecurityConfig::from_source(&lookup)?;
+        let auth = AuthSettings::from_source(&lookup)?;
+        let audit = AuditSettings::from_source(&lookup)?;
+
         Ok(Self {
             app_env,
             database,
@@ -202,6 +215,9 @@ impl Config {
                 cors_allowed_origins,
             },
             trusted_proxy_cidrs,
+            security,
+            auth,
+            audit,
         })
     }
 }
@@ -213,7 +229,7 @@ where
     AppEnv::from_str(&required(lookup, "APP_ENV")?)
 }
 
-fn required<F>(lookup: &F, key: &'static str) -> Result<String, ConfigError>
+pub(crate) fn required<F>(lookup: &F, key: &'static str) -> Result<String, ConfigError>
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -221,23 +237,6 @@ where
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .ok_or(ConfigError::Missing(key))
-}
-
-fn read_secret<F>(lookup: &F, key: &'static str) -> Result<Option<String>, ConfigError>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    if let Some(path) = lookup("DATABASE_URL_FILE") {
-        let path = path.trim();
-        if path.is_empty() {
-            return Err(ConfigError::UnreadableSecretFile("DATABASE_URL_FILE"));
-        }
-        let contents = std::fs::read_to_string(path)
-            .map_err(|_| ConfigError::UnreadableSecretFile("DATABASE_URL_FILE"))?;
-        return Ok(Some(contents.trim().to_owned()));
-    }
-
-    Ok(lookup(key).map(|value| value.trim().to_owned()))
 }
 
 fn validate_database_url(raw: &str, app_env: AppEnv) -> Result<(), ConfigError> {
@@ -341,7 +340,7 @@ fn parse_cidrs(raw: &str) -> Result<Vec<IpNet>, ConfigError> {
     Ok(cidrs)
 }
 
-fn parse_u32<F>(lookup: &F, key: &'static str, default: u32) -> Result<u32, ConfigError>
+pub(crate) fn parse_u32<F>(lookup: &F, key: &'static str, default: u32) -> Result<u32, ConfigError>
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -351,7 +350,7 @@ where
     }
 }
 
-fn parse_u64<F>(lookup: &F, key: &'static str, default: u64) -> Result<u64, ConfigError>
+pub(crate) fn parse_u64<F>(lookup: &F, key: &'static str, default: u64) -> Result<u64, ConfigError>
 where
     F: Fn(&str) -> Option<String>,
 {

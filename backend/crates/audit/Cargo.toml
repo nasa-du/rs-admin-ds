@@ -1,0 +1,27 @@
+[package]
+name = "rs-admin-audit"
+description = "Audit event catalog, RFC 8785 canonicalization, HMAC chain and transactional writer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+hmac.workspace = true
+rs-admin-security.workspace = true
+rs-admin-store.workspace = true
+serde.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

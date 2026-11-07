@@ -4,6 +4,8 @@
 //! URL or credentials; callers may log the stable error message only.
 
 pub mod audit;
+pub mod identity;
+pub mod rbac;
 
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};

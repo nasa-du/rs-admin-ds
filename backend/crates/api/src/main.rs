@@ -41,6 +41,13 @@ async fn run() -> Result<()> {
     )
     .await?;
 
+    // Mirror the code-owned permission catalog and built-in roles before
+    // serving traffic (spec §10 startup order). Migrations are a separate
+    // deployment step; a missing schema fails startup rather than serving an
+    // unauthorized-empty catalog.
+    rs_admin_store::rbac::sync_catalog(database.pool()).await?;
+    tracing::info!("permission catalog synchronized");
+
     let metrics_handle = install_metrics_recorder()?;
     let upkeep = spawn_metrics_upkeep(metrics_handle.clone());
 

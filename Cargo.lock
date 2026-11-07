@@ -1748,6 +1748,10 @@ dependencies = [
 [[package]]
 name = "rs-admin-domain"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "unicode-normalization",
+]
 
 [[package]]
 name = "rs-admin-security"
@@ -1766,6 +1770,7 @@ name = "rs-admin-store"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "rs-admin-domain",
  "serde_json",
  "sqlx",
  "thiserror",

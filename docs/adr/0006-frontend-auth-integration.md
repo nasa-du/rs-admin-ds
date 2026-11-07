@@ -114,8 +114,8 @@
 ### 8. Settings 子页的数据归属
 
 - **Profile**：只编辑 `display_name`（`PATCH /auth/me`）；username、email、phone、status、roles 只读，并标注 username/email/phone 由管理员维护。移除上游 bio、URLs 与硬编码 email 选项。
-- **Account**：改密表单（当前密码、新密码、确认）调 `POST /auth/change-password`；成功后更新 access token、失效并重新拉取 `['auth','me']`，提示其他设备已退出；若原本是受限会话，回到登录前目标。提供「退出所有设备」按钮调 `POST /auth/logout-all`。语言选择保留在 Account，但只写本地 locale 偏好，不接后端；由 i18n 票据实现。
-- **Appearance**：保留现有 theme/font/direction 本地 Cookie，不接后端。
+- **Account**：改密表单（当前密码、新密码、确认）调 `POST /auth/change-password`；成功后更新 access token、失效并重新拉取 `['auth','me']`，提示其他设备已退出；若原本是受限会话，回到登录前目标。提供「退出所有设备」按钮调 `POST /auth/logout-all`。语言选择保留在 Account，但只写本地 `locale` Cookie（`zh-CN`/`en-US`），不接后端；文案与格式化实现见 ADR-0007。
+- **Appearance**：保留主题/字体本地偏好；v1 仅 LTR，不再提供用户可见的方向切换，`DirectionProvider` 与逻辑 CSS 保留，`dir` 固定为 `ltr`（见 ADR-0007 §7）；不接后端。
 - **Notifications / Display**：保留页面，但只做本地偏好（localStorage），明确标注 v1 不接后端、不发送通知；Display 的侧栏偏好可应用到侧栏，不新增 API。移除上游 `showSubmittedData` 作为生产提交路径。
 - 强制改密使用独立 `/change-password` 路由，不复用 Settings 的修改流程；改密成功后的跳转由第 4 节的路由守卫处理。
 
@@ -125,6 +125,12 @@
 - 集成测试（Vitest browser mode + MSW）：登录成功与错误矩阵、冷启动 refresh 成功/401/网络失败、401 刷新后重试与刷新失败登出、未登录/无权限/受限会话三类守卫、侧栏与按钮门控、Profile 保存、改密、重新认证对话框。
 - 不在本票据引入 E2E；真实后端联调与部署相关的端到端验证由部署/测试票据承担。
 - 验收点：未登录不能进入受保护页；已登录访问 `/sign-in` 被带回目标；并发 401 只刷新一次；`reauth_required` 只弹一次且成功后重试一次；取消重新认证不执行操作且表单保留；无权限路由显示 403；`must_change_password` 只能先改密；登出后本机状态立即清空。
+
+## Amendments
+
+- 2026-11-07：[前端裁剪与中英 i18n](https://github.com/nasa-du/rs-admin-ds/issues/13) 修订 §8：
+  - Appearance 不再提供手动 LTR/RTL 切换；v1 仅 LTR，`DirectionProvider` 与逻辑 CSS 保留，locale→dir 映射固定为 `ltr`（ADR-0007 §7）。
+  - Account 的语言选择只支持 `zh-CN`/`en-US`，写入本地 `locale` Cookie；文案、日期/数字格式化与错误码映射的实现见 ADR-0007。
 
 ## Consequences
 

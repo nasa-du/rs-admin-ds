@@ -1,5 +1,9 @@
 //! Pure domain types. This crate must not depend on HTTP, SQLx or Axum.
 
+pub mod identity;
+pub mod permission;
+pub mod rbac;
+
 use std::fmt;
 use std::str::FromStr;
 

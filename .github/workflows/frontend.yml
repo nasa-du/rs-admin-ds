@@ -32,6 +32,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Generate API client
+        run: bun run api:generate
+
+      - name: Check generated API client drift
+        run: |
+          # `--intent-to-add` makes an untracked generated file visible to
+          # `git diff`, so deleting the committed artifact cannot pass CI.
+          git add --intent-to-add -- src/api/generated
+          git diff --exit-code -- src/api/generated
+
       - name: Lint
         run: bun run lint
 

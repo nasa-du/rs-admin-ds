@@ -8,13 +8,15 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use rs_admin_domain::ErrorCode;
 use rs_admin_store::{Database, Readiness};
-use serde_json::json;
+use serde::Serialize;
 use std::time::Duration;
 use tower::ServiceBuilder;
 use tower::limit::ConcurrencyLimitLayer;
+use utoipa::ToSchema;
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
 
 /// Maximum JSON request body for regular endpoints.
 pub const MAX_JSON_BODY_BYTES: usize = 64 * 1024;
@@ -40,15 +42,36 @@ impl AppState {
     }
 }
 
+/// Probe state returned by the health endpoints.
+#[derive(Clone, Copy, Debug, Serialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthState {
+    Live,
+    Ready,
+    Unready,
+}
+
+/// Body returned by the health probes.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct HealthStatus {
+    pub status: HealthState,
+}
+
+/// OpenAPI-aware router shared by the server and the document generator.
+///
+/// Keeping route registration and documentation in one table prevents a
+/// handler from being served without appearing in `openapi.json`, or vice
+/// versa.
+pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(health_live))
+        .routes(routes!(health_ready))
+}
+
 /// Build the production router.
 pub fn build_router(state: AppState) -> Router {
-    with_common_middleware(
-        Router::new()
-            .route("/health/live", get(health_live))
-            .route("/health/ready", get(health_ready))
-            .fallback(not_found)
-            .with_state(state),
-    )
+    let router: Router<AppState> = openapi_router().into();
+    with_common_middleware(router.fallback(not_found).with_state(state))
 }
 
 /// Apply the common middleware stack. Exposed so integration tests can wrap
@@ -72,18 +95,57 @@ pub fn with_common_middleware_and_timeout(router: Router, timeout: Duration) -> 
     )
 }
 
-async fn health_live() -> impl IntoResponse {
-    (StatusCode::OK, Json(json!({ "status": "live" })))
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    tag = "Health",
+    operation_id = "healthLive",
+    responses((
+        status = 200,
+        description = "Process is alive",
+        body = HealthStatus,
+        headers(("X-Request-Id" = String, description = "Server-generated request id"))
+    ))
+)]
+async fn health_live() -> Json<HealthStatus> {
+    Json(HealthStatus {
+        status: HealthState::Live,
+    })
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "Health",
+    operation_id = "healthReady",
+    responses(
+        (
+            status = 200,
+            description = "Service is ready",
+            body = HealthStatus,
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 503,
+            description = "Service is not ready",
+            body = HealthStatus,
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
 async fn health_ready(State(state): State<AppState>) -> Response {
     match state.database.check_ready(READINESS_TIMEOUT).await {
-        Readiness::Ready => (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response(),
+        Readiness::Ready => Json(HealthStatus {
+            status: HealthState::Ready,
+        })
+        .into_response(),
         Readiness::Unready(reason) => {
             tracing::warn!(reason = ?reason, "readiness check failed");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "status": "unready" })),
+                Json(HealthStatus {
+                    status: HealthState::Unready,
+                }),
             )
                 .into_response()
         }

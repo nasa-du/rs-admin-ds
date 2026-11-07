@@ -1,0 +1,237 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rs-admin API",
+    "description": "API for the rs-admin login and permission system. Health probes are served at the root; business endpoints are served under `/api/v1`.",
+    "license": {
+      "name": "UNLICENSED",
+      "identifier": "UNLICENSED"
+    },
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin server"
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "healthLive",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "operationId": "healthReady",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service is not ready",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorCode": {
+        "type": "string",
+        "description": "Stable, closed catalog of API error codes. Clients must map unknown future codes to a generic fallback.",
+        "enum": [
+          "invalid_json",
+          "unknown_field",
+          "unsupported_media_type",
+          "method_not_allowed",
+          "payload_too_large",
+          "validation_failed",
+          "invalid_sort",
+          "page_size_too_large",
+          "empty_update",
+          "invalid_time_range",
+          "time_range_too_large",
+          "invalid_credentials",
+          "access_token_invalid",
+          "session_invalid",
+          "refresh_token_invalid",
+          "refresh_reuse_detected",
+          "account_disabled",
+          "temporary_password_expired",
+          "login_locked",
+          "rate_limited",
+          "password_change_required",
+          "csrf_failed",
+          "reauth_required",
+          "invalid_current_password",
+          "forbidden",
+          "out_of_scope",
+          "self_action_forbidden",
+          "role_immutable",
+          "permission_subset_violation",
+          "not_found",
+          "identifier_taken",
+          "role_name_taken",
+          "role_in_use",
+          "last_super_admin",
+          "password_policy_violation",
+          "password_unchanged",
+          "unknown_role",
+          "empty_permissions",
+          "invalid_permission",
+          "internal_error",
+          "service_unavailable"
+        ]
+      },
+      "FieldError": {
+        "type": "object",
+        "description": "A field-level validation error (JSON Pointer).",
+        "required": [
+          "pointer",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "params": {},
+          "pointer": {
+            "type": "string"
+          }
+        }
+      },
+      "HealthState": {
+        "type": "string",
+        "description": "Probe state returned by the health endpoints.",
+        "enum": [
+          "live",
+          "ready",
+          "unready"
+        ]
+      },
+      "HealthStatus": {
+        "type": "object",
+        "description": "Body returned by the health probes.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/HealthState"
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "description": "RFC 7807 problem document used for every API error.",
+        "required": [
+          "type",
+          "code",
+          "title",
+          "status",
+          "detail",
+          "instance",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "Stable error code from the closed catalog."
+          },
+          "detail": {
+            "type": "string"
+          },
+          "errors": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          },
+          "instance": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Liveness and readiness probes"
+    }
+  ]
+}

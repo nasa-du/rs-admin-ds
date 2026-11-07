@@ -76,5 +76,10 @@
     "actionsFor_other": "Bulk actions for {{count}} selected {{entity}}s",
     "announcement_one": "{{count}} {{entity}} selected. Bulk actions toolbar is available.",
     "announcement_other": "{{count}} {{entity}}s selected. Bulk actions toolbar is available."
+  },
+  "backendStatus": {
+    "checking": "Checking backend connection...",
+    "ready": "Backend is ready.",
+    "unreachable": "Backend is unavailable."
   }
 }

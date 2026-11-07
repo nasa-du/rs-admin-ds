@@ -21,6 +21,14 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  server: {
+    // Keep local development same-origin: the API client uses relative paths
+    // and the backend listens on 8080.
+    proxy: {
+      '/api/v1': 'http://127.0.0.1:8080',
+      '/health': 'http://127.0.0.1:8080',
+    },
+  },
   test: {
     silent: 'passed-only',
     unstubEnvs: true,
@@ -33,6 +41,7 @@ export default defineConfig({
     coverage: {
       // include: ['src/**/*.{js,jsx,ts,tsx}'], // Uncomment to expand the report to all src/**/* so untested modules appear as 0% coverage.
       exclude: [
+        'src/api/generated/**',
         'src/components/ui/**',
         'src/assets/**',
         'src/tanstack-table.d.ts',

@@ -927,7 +927,7 @@ sequenceDiagram
 
 ### 7.10 OpenAPI 与 TypeScript 客户端
 
-- 后端用 utoipa 6 + utoipa-axum 0.3 生成 OpenAPI 3.1；`servers: [{url: "/api/v1"}]`；`/api-docs/openapi.json` 仅内网/开发可达；Swagger UI 仅开发/内网启用，生产关闭。
+- 后端用 utoipa 6 + utoipa-axum 0.3 生成 OpenAPI 3.1；`servers: [{url: "/"}]`，业务端点文档路径带完整 `/api/v1` 前缀（ADR-0004 2026-11-07 修订）；`/api-docs/openapi.json` 仅内网/开发可达；Swagger UI 仅开发/内网启用，生产关闭。
 - tags：`Auth`、`Users`、`Roles`、`Permissions`、`Audit Logs`。
 - operationId 固定：`login`、`refreshToken`、`logout`、`logoutAll`、`getMe`、`updateMe`、`changePassword`、`reauthenticate`、`listUsers`、`getUser`、`createUser`、`updateUser`、`setUserStatus`、`resetUserPassword`、`unlockUser`、`setUserRoles`、`revokeUserSessions`、`listRoles`、`getRole`、`createRole`、`updateRole`、`setRolePermissions`、`deleteRole`、`listPermissions`、`listAuditLogs`、`getAuditLog`。
 - security schemes：`bearerAuth`（HTTP Bearer JWT）与 `refreshCookie`（apiKey cookie `__Host-refresh`，仅文档表达，浏览器自动发送）；`X-Requested-With` 作为 cookie 认证端点的必填 header 参数。

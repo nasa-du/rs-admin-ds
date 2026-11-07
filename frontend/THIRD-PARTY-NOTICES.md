@@ -33,6 +33,7 @@ retain their own licenses as declared in the package metadata.
 | tailwind-merge | MIT | Copyright (c) 2021 Dany Castillo |
 | tw-animate-css | MIT | Copyright (c) Wombosvideo |
 | react-top-loading-bar | MIT | Copyright (c) 2018 Klendi Gocci |
+| axios | MIT | Copyright (c) 2014-present Matt Zabriskie & Collaborators |
 
 ## Build and test tooling
 
@@ -45,6 +46,8 @@ retain their own licenses as declared in the package metadata.
 | Vitest | MIT | Copyright (c) 2021-present Anthony Fu and Vitest contributors |
 | Playwright | Apache-2.0 | Copyright (c) Microsoft Corporation |
 | Bun | MIT | Copyright (c) Bun contributors |
+| orval | MIT | Copyright (c) 2021-present Victor Bury and orval contributors |
+| ajv | MIT | Copyright (c) 2015-2021 Evgeny Poberezkin |
 
 If you redistribute this frontend, keep both the upstream MIT notice and this
 file with the distribution.

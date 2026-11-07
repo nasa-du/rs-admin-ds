@@ -189,6 +189,9 @@
   - `action` 与 `target_type` 在 OpenAPI 中用开放 string + 文档化取值目录（新增事件/目标类型视为加法变更）；`severity` 与 `result` 保持封闭枚举。前端对未知值回退显示原始 code。
   - 审计列表排序白名单仅 `occurred_at`（`sort=occurred_at` / `sort=-occurred_at`，默认 `-occurred_at`）。
   - 审计日志导出/批量下载仍不在 v1 范围；审计链校验 UI 不属于 API 契约。
+- 2026-11-07：[OpenAPI 3.1 与生成 TS 客户端流水线](https://github.com/nasa-du/rs-admin-ds/issues/25) 修订：
+  - OpenAPI 根 `servers` 为 `[{url: "/"}]`；业务端点路径在文档中带完整 `/api/v1` 前缀。原因：`/health/*` 位于根路径且必须通过生成客户端调用；若根 server 为 `/api/v1`，生成客户端会给健康检查拼上错误前缀。实际 HTTP 路径不变，仍由 `/api/v1` 承载业务端点。
+  - 健康检查 operationId 固定为 `healthLive`、`healthReady`；响应状态使用封闭枚举 `HealthState`（`live`/`ready`/`unready`）。
 
 ## Consequences
 

@@ -8,11 +8,13 @@ mod error;
 mod logging;
 mod metrics;
 mod middleware;
+mod openapi;
 mod router;
 
 pub use error::{ApiError, FieldError, ProblemDetails};
 pub use logging::{LoggingError, build_env_filter, init_logging};
 pub use metrics::{MetricsError, install_metrics_recorder, metrics_router, spawn_metrics_upkeep};
+pub use openapi::openapi_document;
 pub use router::{
     AppState, MAX_IN_FLIGHT_REQUESTS, MAX_JSON_BODY_BYTES, REQUEST_TIMEOUT, build_router,
     with_common_middleware, with_common_middleware_and_timeout,

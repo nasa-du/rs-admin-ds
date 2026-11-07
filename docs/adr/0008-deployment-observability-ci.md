@@ -240,6 +240,12 @@
 3. **明确不做**：Kubernetes/Kustomize/Helm、WORM 外部归档、永久 staging、蓝绿/双实例、Redis、邮件告警、外部日志 SaaS、服务网格、GitOps、多区域/多活。
 4. **复查条件**：实际域名无法同站 → 按 ADR-0001 回退 BFF；容量/SLO 超限或要求多实例/高可用 → 重新评估主机/K8s/托管 PG；合规要求 WORM → 引入对象存储 Object Lock；PG19 发布 → 执行 §11 演练与升级；主机故障事故 → 评估第二主机或托管 PG。
 
+## Amendments
+
+- 2026-11-07：[OpenAPI 3.1 与生成 TS 客户端流水线](https://github.com/nasa-du/rs-admin-ds/issues/25) 修订 §2.5 与 §12.1：
+  - `VITE_API_BASE_URL` 为 API 源（不含 `/api/v1`），生产占位 `https://api.example.com`；生成的客户端路径已带完整 `/api/v1` 前缀（ADR-0004 2026-11-07 修订、ADR-0006 同日修订）。
+  - 开发 Vite proxy 转发 `/api/v1` 与 `/health` 到 `http://localhost:8080`。
+
 ## Consequences
 
 - **正面**：单机 Compose 的运维面最小，同时用固定镜像、一次性迁移、备份/恢复与外部探测守住生产底线；数据库可通过 `.env` 分离，未来迁移到托管 PG 或多主机不需要改应用契约；观测栈覆盖 ADR-0005 要求的登录失败、锁定、刷新复用、审计写入失败与延迟；CI 把格式化、lint、测试、迁移、OpenAPI/orval 漂移与镜像构建收口；PG18 升级有固定 tag、可重复迁移与可演练的 `pg_upgrade` 手册。

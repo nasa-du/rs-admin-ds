@@ -73,5 +73,10 @@
     "clearSelection": "清除选择（Esc）",
     "actionsFor_other": "{{entity}}：已选择 {{count}} 项",
     "announcement_other": "已选择 {{count}} 个{{entity}}。批量操作工具栏可用。"
+  },
+  "backendStatus": {
+    "checking": "正在检查后端连接…",
+    "ready": "后端已就绪。",
+    "unreachable": "后端不可用。"
   }
 }

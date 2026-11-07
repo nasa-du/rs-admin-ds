@@ -6,6 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { BackendStatus } from '@/features/health/backend-status'
 import { AuthLayout } from '../auth-layout'
 import { UserAuthForm } from './components/user-auth-form'
 
@@ -23,6 +24,10 @@ export function SignIn() {
         </CardHeader>
         <CardContent>
           <UserAuthForm />
+          {/* Health probes are not exposed publicly in production
+              (ADR-0008); this is the development smoke check for the
+              generated API client. */}
+          {import.meta.env.DEV && <BackendStatus />}
         </CardContent>
       </Card>
     </AuthLayout>

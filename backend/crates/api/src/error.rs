@@ -9,12 +9,16 @@ use axum::response::{IntoResponse, Response};
 use rs_admin_domain::ErrorCode;
 use serde::Serialize;
 use serde_json::Value;
+use std::borrow::Cow;
+use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+use utoipa::{PartialSchema, ToSchema};
 
 /// Content type required for every error response.
 pub const PROBLEM_CONTENT_TYPE: &str = "application/problem+json";
 
 /// A field-level validation error (JSON Pointer).
-#[derive(Clone, Debug, Serialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, PartialEq, ToSchema)]
 pub struct FieldError {
     pub pointer: String,
     pub code: String,
@@ -23,10 +27,12 @@ pub struct FieldError {
 }
 
 /// RFC 7807 problem document used for every API error.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct ProblemDetails {
     #[serde(rename = "type")]
     pub type_uri: String,
+    /// Stable error code from the closed catalog.
+    #[schema(value_type = ErrorCodeSchema)]
     pub code: String,
     pub title: String,
     pub status: u16,
@@ -53,6 +59,32 @@ impl ProblemDetails {
             request_id: request_id.into(),
             errors: None,
         }
+    }
+}
+
+/// OpenAPI schema for the closed error-code catalog.
+///
+/// The schema is derived from [`ErrorCode::ALL`] instead of a duplicate enum,
+/// so adding a code to the domain catalog automatically updates both the
+/// generated client and `openapi.json`.
+pub struct ErrorCodeSchema;
+
+impl PartialSchema for ErrorCodeSchema {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .enum_values(Some(ErrorCode::ALL.iter().map(|code| code.as_str())))
+            .description(Some(
+                "Stable, closed catalog of API error codes. Clients must map \
+                 unknown future codes to a generic fallback.",
+            ))
+            .into()
+    }
+}
+
+impl ToSchema for ErrorCodeSchema {
+    fn name() -> Cow<'static, str> {
+        Cow::Borrowed("ErrorCode")
     }
 }
 

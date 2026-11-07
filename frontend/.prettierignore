@@ -9,6 +9,7 @@
 !tsconfig.json
 !tsconfig.node.json
 !vite.config.ts
+!orval.config.ts
 !.prettierrc
 !README.md
 !eslint.config.js
@@ -17,3 +18,6 @@
 
 # Ignore auto generated routeTree.gen.ts
 /src/routeTree.gen.ts
+
+# Ignore the generated API client; orval owns its formatting
+/src/api/generated/

@@ -51,6 +51,16 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      - name: Generate OpenAPI document
+        run: cargo run --quiet --package rs-admin-api --bin openapi -- backend/openapi.json
+
+      - name: Check OpenAPI drift
+        run: |
+          # `--intent-to-add` makes an untracked generated file visible to
+          # `git diff`, so deleting the committed artifact cannot pass CI.
+          git add --intent-to-add -- backend/openapi.json
+          git diff --exit-code -- backend/openapi.json
+
       - name: Test
         run: cargo test --workspace --all-targets
 

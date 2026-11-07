@@ -131,6 +131,8 @@
 - 2026-11-07：[前端裁剪与中英 i18n](https://github.com/nasa-du/rs-admin-ds/issues/13) 修订 §8：
   - Appearance 不再提供手动 LTR/RTL 切换；v1 仅 LTR，`DirectionProvider` 与逻辑 CSS 保留，locale→dir 映射固定为 `ltr`（ADR-0007 §7）。
   - Account 的语言选择只支持 `zh-CN`/`en-US`，写入本地 `locale` Cookie；文案、日期/数字格式化与错误码映射的实现见 ADR-0007。
+- 2026-11-07：[OpenAPI 3.1 与生成 TS 客户端流水线](https://github.com/nasa-du/rs-admin-ds/issues/25) 修订 §2：
+  - `VITE_API_BASE_URL` 的值改为 API 源（`scheme://host[:port]`，不含 `/api/v1`），因为生成的客户端路径已带完整 `/api/v1` 前缀（ADR-0004 2026-11-07 修订）。生产占位 `https://api.example.com`；开发默认留空，Vite dev proxy 转发 `/api/v1` 与 `/health` 到 `http://localhost:8080`。
 
 ## Consequences
 

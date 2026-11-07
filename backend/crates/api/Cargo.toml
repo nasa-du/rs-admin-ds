@@ -23,6 +23,8 @@ tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

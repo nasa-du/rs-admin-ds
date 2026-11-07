@@ -1,3 +1,5 @@
 * text=auto
 *.sql text eol=lf
 Cargo.lock text eol=lf
+backend/openapi.json text eol=lf linguist-generated=true
+frontend/src/api/generated/** text eol=lf linguist-generated=true

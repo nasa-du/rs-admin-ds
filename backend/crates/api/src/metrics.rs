@@ -1,0 +1,73 @@
+//! Prometheus recorder, upkeep task and the internal metrics listener.
+
+use axum::Router;
+use axum::extract::State;
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
+use axum::routing::get;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use std::time::Duration;
+use tokio::task::JoinHandle;
+
+const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+
+#[derive(Debug, thiserror::Error)]
+pub enum MetricsError {
+    #[error("failed to install metrics recorder: {0}")]
+    Install(String),
+}
+
+/// Install the global Prometheus recorder and describe the metric catalog.
+pub fn install_metrics_recorder() -> Result<PrometheusHandle, MetricsError> {
+    let builder = PrometheusBuilder::new()
+        .set_buckets(&[
+            0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
+        ])
+        .map_err(|error| MetricsError::Install(error.to_string()))?;
+    let handle = builder
+        .install_recorder()
+        .map_err(|error| MetricsError::Install(error.to_string()))?;
+
+    metrics::describe_counter!("http_requests_total", "Total HTTP requests.");
+    metrics::describe_histogram!(
+        "http_request_duration_seconds",
+        "HTTP request latency in seconds."
+    );
+    metrics::describe_gauge!("build_info", "Build information.");
+    metrics::gauge!(
+        "build_info",
+        "version" => env!("CARGO_PKG_VERSION"),
+        "commit" => option_env!("GIT_COMMIT").unwrap_or("unknown")
+    )
+    .set(1.0);
+
+    Ok(handle)
+}
+
+/// Refresh histogram internals periodically so memory does not grow without
+/// bound. The exporter does not spawn this task itself.
+pub fn spawn_metrics_upkeep(handle: PrometheusHandle) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            handle.run_upkeep();
+        }
+    })
+}
+
+/// Internal-only metrics listener. It intentionally bypasses all business
+/// middleware and exposes only `GET /metrics`.
+pub fn metrics_router(handle: PrometheusHandle) -> Router {
+    Router::new()
+        .route("/metrics", get(metrics_handler))
+        .with_state(handle)
+}
+
+async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, METRICS_CONTENT_TYPE)],
+        handle.render(),
+    )
+}

@@ -1,0 +1,20 @@
+[package]
+name = "rs-admin-config"
+description = "Environment configuration loading and startup validation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ipnet.workspace = true
+secrecy.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

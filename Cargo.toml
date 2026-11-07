@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["backend/crates/*"]
+default-members = ["backend/crates/api"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "UNLICENSED"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8.9"
+dotenvy = "0.15"
+ipnet = "2"
+metrics = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9.0", default-features = false, features = [
+    "postgres",
+    "runtime-tokio",
+    "tls-rustls-ring",
+    "macros",
+    "migrate",
+    "json",
+    "uuid",
+] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5.3", features = ["util", "limit"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url = "2"
+uuid = { version = "1.29.0", features = ["v7", "serde"] }
+
+rs-admin-config = { path = "backend/crates/config" }
+rs-admin-domain = { path = "backend/crates/domain" }
+rs-admin-store = { path = "backend/crates/store" }

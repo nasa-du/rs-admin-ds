@@ -4,6 +4,7 @@
 //! URL or credentials; callers may log the stable error message only.
 
 pub mod audit;
+pub mod auth;
 pub mod identity;
 pub mod rbac;
 

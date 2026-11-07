@@ -78,6 +78,72 @@ fn health_operations_have_stable_operation_ids_and_response_schemas() {
 }
 
 #[test]
+fn auth_operations_are_documented_with_stable_ids_and_bearer_security() {
+    let doc = document();
+
+    let login = &doc["paths"]["/api/v1/auth/login"]["post"];
+    assert_eq!(login["operationId"], "login");
+    assert_eq!(login["tags"][0], "Auth");
+    assert_eq!(
+        login["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LoginRequest"
+    );
+    assert_eq!(
+        login["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LoginResponse"
+    );
+    assert!(
+        login["responses"]["200"]["headers"]["Set-Cookie"].is_object(),
+        "login must document the refresh cookie header"
+    );
+    assert!(login.get("security").is_none(), "login is unauthenticated");
+    assert_eq!(
+        login["responses"]["401"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails"
+    );
+    assert!(
+        login["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+        "401 must document the Bearer challenge"
+    );
+    assert!(
+        login["responses"]["429"]["headers"]["Retry-After"].is_object(),
+        "429 must document Retry-After"
+    );
+
+    for (path, method, operation_id, response_schema) in [
+        (
+            "/api/v1/auth/me",
+            "get",
+            "getMe",
+            "#/components/schemas/UserSelfResponse",
+        ),
+        (
+            "/api/v1/auth/reauthenticate",
+            "post",
+            "reauthenticate",
+            "#/components/schemas/ReauthenticateResponse",
+        ),
+    ] {
+        let operation = &doc["paths"][path][method];
+        assert_eq!(operation["operationId"], operation_id, "{path}");
+        assert_eq!(
+            operation["security"][0]["bearerAuth"],
+            serde_json::json!([]),
+            "{path} must require bearerAuth"
+        );
+        assert_eq!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            response_schema
+        );
+    }
+
+    let scheme = &doc["components"]["securitySchemes"]["bearerAuth"];
+    assert_eq!(scheme["type"], "http");
+    assert_eq!(scheme["scheme"], "bearer");
+    assert_eq!(scheme["bearerFormat"], "JWT");
+}
+
+#[test]
 fn problem_details_and_the_closed_error_catalog_are_in_the_schema() {
     let doc = document();
     let schemas = &doc["components"]["schemas"];

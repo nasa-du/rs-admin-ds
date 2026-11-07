@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::extract::{MatchedPath, Request, State};
 use axum::http::{
     HeaderValue, StatusCode,
-    header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+    header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, WWW_AUTHENTICATE},
 };
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -85,6 +85,7 @@ pub(crate) async fn normalize_problem(request: Request, next: Next) -> Response 
         let status =
             StatusCode::from_u16(details.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut rebuilt = with_problem_body(response, status, &details);
+        add_unauthorized_challenge(&mut rebuilt);
         rebuilt.extensions_mut().insert(details);
         return rebuilt;
     }
@@ -95,9 +96,20 @@ pub(crate) async fn normalize_problem(request: Request, next: Next) -> Response 
     let details = ProblemDetails::for_code(code, path, request_id);
     let status = StatusCode::from_u16(code.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut rebuilt = with_problem_body(response, status, &details);
+    add_unauthorized_challenge(&mut rebuilt);
     rebuilt.extensions_mut().insert(details);
     rebuilt.extensions_mut().insert(code);
     rebuilt
+}
+
+/// Every 401 carries the Bearer challenge required by the API contract.
+fn add_unauthorized_challenge(response: &mut Response) {
+    if response.status() == StatusCode::UNAUTHORIZED {
+        response
+            .headers_mut()
+            .entry(WWW_AUTHENTICATE)
+            .or_insert(HeaderValue::from_static("Bearer realm=\"rs-admin\""));
+    }
 }
 
 fn code_for_status(status: StatusCode) -> Option<ErrorCode> {

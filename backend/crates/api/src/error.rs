@@ -90,8 +90,14 @@ impl ToSchema for ErrorCodeSchema {
 
 /// An API error. Handlers return this to emit a problem document; the problem
 /// normalizer fills in `instance` and `request_id` from the request context.
+///
+/// The payload is boxed: handlers return this type as their `Err`, and keeping
+/// the error small avoids inflating every `Result` on the request path.
 #[derive(Debug)]
-pub struct ApiError {
+pub struct ApiError(Box<ApiErrorInner>);
+
+#[derive(Debug)]
+struct ApiErrorInner {
     code: ErrorCode,
     detail: Option<String>,
     errors: Option<Vec<FieldError>>,
@@ -100,41 +106,62 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(code: ErrorCode) -> Self {
-        Self {
+        Self(Box::new(ApiErrorInner {
             code,
             detail: None,
             errors: None,
             headers: HeaderMap::new(),
-        }
+        }))
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
+        self.0.detail = Some(detail.into());
         self
     }
 
     pub fn with_errors(mut self, errors: Vec<FieldError>) -> Self {
-        self.errors = Some(errors);
+        self.0.errors = Some(errors);
         self
     }
 
     /// Attach a response header (for example `WWW-Authenticate` or
     /// `Retry-After`).
     pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
-        self.headers.insert(name, value);
+        self.0.headers.insert(name, value);
         self
     }
 
     pub fn code(&self) -> ErrorCode {
-        self.code
+        self.0.code
+    }
+
+    /// Fail-closed response when a dependency (database, audit, hashing
+    /// capacity) is unavailable.
+    pub fn service_unavailable() -> Self {
+        Self::new(ErrorCode::ServiceUnavailable)
+    }
+
+    pub fn access_token_invalid() -> Self {
+        Self::new(ErrorCode::AccessTokenInvalid)
+    }
+
+    pub fn session_invalid() -> Self {
+        Self::new(ErrorCode::SessionInvalid)
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut details = ProblemDetails::for_code(self.code, "", "");
-        details.detail = self.detail.unwrap_or_else(|| self.code.detail().to_owned());
-        details.errors = self.errors;
+        let ApiErrorInner {
+            code,
+            detail,
+            errors,
+            headers,
+        } = *self.0;
+
+        let mut details = ProblemDetails::for_code(code, "", "");
+        details.detail = detail.unwrap_or_else(|| code.detail().to_owned());
+        details.errors = errors;
 
         let status =
             StatusCode::from_u16(details.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -145,9 +172,9 @@ impl IntoResponse for ApiError {
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static(PROBLEM_CONTENT_TYPE));
         response.headers_mut().remove(CONTENT_LENGTH);
-        response.headers_mut().extend(self.headers);
+        response.headers_mut().extend(headers);
         response.extensions_mut().insert(details);
-        response.extensions_mut().insert(self.code);
+        response.extensions_mut().insert(code);
         response
     }
 }

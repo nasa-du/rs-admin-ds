@@ -1,5 +1,6 @@
 //! Router assembly, health endpoints and the common middleware stack.
 
+use crate::auth::{AUTH_JSON_BODY_BYTES, AuthServices};
 use crate::error::ApiError;
 use crate::middleware;
 use axum::Json;
@@ -11,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use rs_admin_domain::ErrorCode;
 use rs_admin_store::{Database, Readiness};
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceBuilder;
 use tower::limit::ConcurrencyLimitLayer;
@@ -31,14 +33,33 @@ pub const MAX_IN_FLIGHT_REQUESTS: usize = 100;
 pub const READINESS_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Shared application state.
+///
+/// The authentication services are optional so the walking-skeleton health
+/// routes keep working in tests that do not provide key material; auth
+/// handlers fail closed with 503 when they are absent.
 #[derive(Clone)]
 pub struct AppState {
     pub database: Database,
+    auth: Option<Arc<AuthServices>>,
 }
 
 impl AppState {
     pub fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            auth: None,
+        }
+    }
+
+    pub fn with_auth(database: Database, auth: AuthServices) -> Self {
+        Self {
+            database,
+            auth: Some(Arc::new(auth)),
+        }
+    }
+
+    pub(crate) fn auth(&self) -> Option<&AuthServices> {
+        self.auth.as_deref()
     }
 }
 
@@ -63,9 +84,18 @@ pub struct HealthStatus {
 /// handler from being served without appearing in `openapi.json`, or vice
 /// versa.
 pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
+    // Authentication request bodies are tiny; the 1 KiB cap limits the cost of
+    // unauthenticated JSON parsing (spec §8.1).
+    let auth = OpenApiRouter::new()
+        .routes(routes!(crate::auth::login))
+        .routes(routes!(crate::auth::get_me))
+        .routes(routes!(crate::auth::reauthenticate))
+        .layer(DefaultBodyLimit::max(AUTH_JSON_BODY_BYTES));
+
     OpenApiRouter::new()
         .routes(routes!(health_live))
         .routes(routes!(health_ready))
+        .merge(auth)
 }
 
 /// Build the production router.

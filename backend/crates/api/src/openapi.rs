@@ -4,9 +4,14 @@
 //! `backend/openapi.json`, CI diffs the result, and the frontend generates its
 //! TypeScript client from the committed file.
 
+use crate::auth::{
+    LoginRequest, LoginResponse, ReauthenticateRequest, ReauthenticateResponse, RoleRefResponse,
+    UserSelfResponse,
+};
 use crate::error::{ErrorCodeSchema, FieldError, ProblemDetails};
 use crate::router::{HealthState, HealthStatus, openapi_router};
-use utoipa::OpenApi;
+use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -18,16 +23,41 @@ use utoipa::OpenApi;
                        are served under `/api/v1`."
     ),
     servers((url = "/", description = "Same-origin server")),
-    tags((name = "Health", description = "Liveness and readiness probes")),
+    tags(
+        (name = "Health", description = "Liveness and readiness probes"),
+        (name = "Auth", description = "Password login, current user and reauthentication")
+    ),
     components(schemas(
         ProblemDetails,
         FieldError,
         ErrorCodeSchema,
         HealthState,
         HealthStatus,
-    ))
+        LoginRequest,
+        LoginResponse,
+        ReauthenticateRequest,
+        ReauthenticateResponse,
+        RoleRefResponse,
+        UserSelfResponse,
+    )),
+    modifiers(&SecurityAddon)
 )]
 struct ApiDoc;
+
+/// Declares the Bearer JWT scheme used by `/auth/me` and
+/// `/auth/reauthenticate`.
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi
+            .components
+            .get_or_insert_with(utoipa::openapi::Components::new);
+        let mut scheme = Http::new(HttpAuthScheme::Bearer);
+        scheme.bearer_format = Some("JWT".to_owned());
+        components.add_security_scheme("bearerAuth", SecurityScheme::Http(scheme));
+    }
+}
 
 /// Build the OpenAPI 3.1 document for the running API surface.
 ///

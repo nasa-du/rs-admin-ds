@@ -4,8 +4,27 @@
 //! key material. Parsing errors are intentionally coarse: they name the
 //! problem, not the offending bytes.
 
+pub mod jwt;
+pub mod password;
+pub mod token;
+
+pub use jwt::{
+    ACCESS_TOKEN_TYPE, AccessTokenClaims, JWT_ACCESS_TOKEN_TTL_SECONDS, JWT_LEEWAY_SECONDS,
+    JwtError, JwtIssuer,
+};
+pub use password::{
+    ARGON2_MEMORY_KIB, ARGON2_OUTPUT_BYTES, ARGON2_PARALLELISM, ARGON2_TIME_COST,
+    PASSWORD_MAX_BYTES, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, PasswordError, PasswordPolicy,
+    PasswordService, PolicyViolation, VerifyOutcome, exceeds_authentication_limit,
+};
+pub use token::{
+    REFRESH_TOKEN_BYTES, TokenError, generate_refresh_token, hash_refresh_token,
+    identifier_hmac_hex,
+};
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use ed25519_dalek::pkcs8::DecodePrivateKey;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use secrecy::{ExposeSecret, SecretBox};
 use std::collections::BTreeMap;
@@ -27,6 +46,8 @@ pub enum KeyError {
     InvalidKeyRing,
     #[error("audit chain keyring does not contain the current key id")]
     CurrentKeyMissing,
+    #[error("JWT issuer, audience and key id must be non-empty")]
+    InvalidJwtConfiguration,
 }
 
 /// A symmetric key used for HMAC or key derivation.
@@ -166,9 +187,19 @@ impl JwtSigningKey {
             .map_err(|_| KeyError::InvalidEd25519Pem)
     }
 
-    /// The underlying key, for the JWT signer added in a later change.
+    /// The underlying key, for the JWT signer.
     pub fn encoding_key(&self) -> &EncodingKey {
         &self.0
+    }
+
+    /// Derive the Ed25519 public key that verifies tokens signed with this
+    /// private key.
+    pub fn verification_key(&self) -> Result<JwtVerificationKey, KeyError> {
+        let signing_key = ed25519_dalek::SigningKey::from_pkcs8_der(self.0.as_bytes())
+            .map_err(|_| KeyError::InvalidEd25519Pem)?;
+        Ok(JwtVerificationKey(DecodingKey::from_ed_der(
+            &signing_key.verifying_key().to_bytes(),
+        )))
     }
 }
 

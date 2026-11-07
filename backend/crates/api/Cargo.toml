@@ -10,11 +10,14 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+chrono.workspace = true
 dotenvy.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+rs-admin-audit.workspace = true
 rs-admin-config.workspace = true
 rs-admin-domain.workspace = true
+rs-admin-security.workspace = true
 rs-admin-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,7 +31,9 @@ utoipa-axum.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+argon2.workspace = true
 ed25519-dalek = { version = "2.1.1", features = ["pkcs8", "pem"] }
+sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true
 

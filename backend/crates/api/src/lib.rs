@@ -4,6 +4,7 @@
 //! routing failures) carries a server-generated request id, RFC 7807 problem
 //! details where applicable, and the API security headers.
 
+mod auth;
 mod error;
 mod logging;
 mod metrics;
@@ -11,6 +12,7 @@ mod middleware;
 mod openapi;
 mod router;
 
+pub use auth::{AuthServiceError, AuthServices};
 pub use error::{ApiError, FieldError, ProblemDetails};
 pub use logging::{LoggingError, build_env_filter, init_logging};
 pub use metrics::{MetricsError, install_metrics_recorder, metrics_router, spawn_metrics_upkeep};

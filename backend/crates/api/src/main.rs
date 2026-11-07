@@ -1,6 +1,6 @@
 use anyhow::Result;
 use rs_admin_api::{
-    AppState, build_router, init_logging, install_metrics_recorder, metrics_router,
+    AppState, AuthServices, build_router, init_logging, install_metrics_recorder, metrics_router,
     spawn_metrics_upkeep, store_pool_settings,
 };
 use rs_admin_config::Config;
@@ -48,10 +48,15 @@ async fn run() -> Result<()> {
     rs_admin_store::rbac::sync_catalog(database.pool()).await?;
     tracing::info!("permission catalog synchronized");
 
+    // Build all keyed services before serving: an unusable key is a startup
+    // failure, never a per-request 500.
+    let auth = AuthServices::new(&config.security, &config.auth)?;
+    tracing::info!("authentication services initialized");
+
     let metrics_handle = install_metrics_recorder()?;
     let upkeep = spawn_metrics_upkeep(metrics_handle.clone());
 
-    let app = build_router(AppState::new(database.clone()));
+    let app = build_router(AppState::with_auth(database.clone(), auth));
     let api_listener = TcpListener::bind(config.server.api_addr).await?;
     let metrics_listener = TcpListener::bind(config.server.metrics_addr).await?;
 

@@ -3,6 +3,8 @@
 //! This is the only crate that writes SQL. Errors never carry the database
 //! URL or credentials; callers may log the stable error message only.
 
+pub mod audit;
+
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::fmt;

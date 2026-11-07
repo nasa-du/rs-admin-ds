@@ -1,0 +1,21 @@
+[package]
+name = "rs-admin-security"
+description = "Key material parsing and validation shared by authentication and audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+jsonwebtoken.workspace = true
+secrecy.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "2.1.1", features = ["pkcs8", "pem"] }
+
+[lints]
+workspace = true

@@ -3,6 +3,11 @@
 *.pem
 *.key
 
+# Development key material and production secret mounts
+/deploy/secrets-dev/
+/deploy/secrets/*
+!/deploy/secrets/README.md
+
 # Local agent worktrees
 .claude/worktrees/
 

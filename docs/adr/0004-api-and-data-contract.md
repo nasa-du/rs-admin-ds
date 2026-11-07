@@ -182,6 +182,13 @@
   - 安全响应头、CORS、CSP、密钥与日志契约见 ADR-0005 §7–9。
   - §10 中「审计日志保留与清理」的保留期与清理策略改由 ADR-0005 §6.3 决定；「部署、可观测与 CI」只负责执行、监控与外部归档评估。
 - 2026-11-05：`auth_time` claim 与 `auth_sessions.authenticated_at` 由 ADR-0001 的修订引入。
+- 2026-11-07：[审计日志查询 UI](https://github.com/nasa-du/rs-admin-ds/issues/11) 修订：
+  - `GET /audit-logs` 增加可选 `ip` 过滤：精确匹配；服务端将 IPv4-mapped IPv6 归一化为 IPv4、按标准压缩 IPv6；不做 CIDR。`audit_logs` 增加 `(ip, occurred_at DESC)` 与 `(request_id)` 索引。
+  - `AuditLogSummary.target` 由 `{type, id}` 扩展为 `{type, id, label}`；`target.label` 可空，是事件发生时的名称快照（user 为 username、role 为 name，其他类型为 null）。`audit_logs` 增加 `target_label text`（nullable），并纳入 ADR-0005 的审计链行哈希。
+  - `target_type` 当前目录为 `user`、`role`、`session`、`audit_log`、`system`，允许未来新增；`target_id`/`target_label` 可空。每个事件的 target 映射见 ADR-0005「Amendments」。
+  - `action` 与 `target_type` 在 OpenAPI 中用开放 string + 文档化取值目录（新增事件/目标类型视为加法变更）；`severity` 与 `result` 保持封闭枚举。前端对未知值回退显示原始 code。
+  - 审计列表排序白名单仅 `occurred_at`（`sort=occurred_at` / `sort=-occurred_at`，默认 `-occurred_at`）。
+  - 审计日志导出/批量下载仍不在 v1 范围；审计链校验 UI 不属于 API 契约。
 
 ## Consequences
 

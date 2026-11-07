@@ -265,6 +265,30 @@
 - **ADR-0003**：账号层阈值不变；IP/全局阈值与收缩机制由本 ADR 补充；step-up 操作清单扩展到 `POST /users` 与 username/email 修改；审计事件按本 ADR §6.1 扩展。
 - **CONTEXT.md**：新增重新认证、认证时间、登录限流、失败窗口、常见密码列表、审计级别、审计链、可信代理。
 
+## Amendments
+
+- 2026-11-07：[审计日志查询 UI](https://github.com/nasa-du/rs-admin-ds/issues/11) 修订 §6.2/§6.3：
+  - `audit_logs` 增加 `target_label text`（nullable）。写入时取事件发生后的名称快照：`user` 目标写 username，`role` 目标写 name，其他目标类型为 null；`user_updated` 用新 username，`role_updated` 用新 name。该列纳入 §6.3.3 的 JCS 行规范化与 HMAC 链（`row` 包含 `target_label`）。
+  - `target_type` / `target_id` / `target_label` 的事件映射：
+
+    | 事件组 | target_type | target_id | target_label |
+    |---|---|---|---|
+    | `user_*`、`authn_password_changed`/`_fail`、`authn_reauth_*`、`system_bootstrap_super_admin`/`system_recover_super_admin` | `user` | 目标用户 id | username 快照 |
+    | `authn_login_success`、`authn_logout`、`authn_refresh_reuse_detected`、`authn_session_evicted` | `session` | 会话 id | null |
+    | `authn_logout_all` | `user` | 用户 id | username 快照 |
+    | `authn_login_fail` / `authn_login_lock`（已知用户） | `user` | 用户 id | username 快照 |
+    | `authn_login_fail`（未知标识）、`authn_login_rate_limited`（IP/全局） | `system` | null | null |
+    | `authz_denied` / `authz_step_up_denied` | 能确定被拒对象时 `user`/`role`，否则 `system` | 对应 id 或 null | 对应名称快照或 null |
+    | `role_*` | `role` | 角色 id | name 快照 |
+    | `crypto_key_rotated`、`system_audit_logs_purged` | `system` | null | null |
+    | `audit_log_accessed` | `audit_log` | 被查看日志 id | null |
+    | 未来未知事件 | 可空或 `system` | 可空 | null |
+
+  - `target_type` 允许未来新增；前端与验证工具对未知值按原始字符串处理。
+- 2026-11-07：[前端认证集成与路由守卫](https://github.com/nasa-du/rs-admin-ds/issues/12) 修订 §7.4 CORS credentials 允许清单：
+  - 增加 `POST /auth/change-password` 与 `POST /auth/logout-all`。两者都可能设置或清除 `__Host-refresh` Cookie（change-password 轮换 refresh token，logout-all 清除 Cookie），跨源响应必须带 `Access-Control-Allow-Credentials: true` 且 `Access-Control-Allow-Origin` 为具体前端 origin；前端对这两个端点使用 `withCredentials: true`。
+  - 其余 credentials 端点保持 `/auth/login`、`/auth/refresh`、`/auth/logout`；`GET/PATCH /auth/me` 与 `POST /auth/reauthenticate` 只用 Bearer、不需要 credentials。
+
 ## Consequences
 
 - **正面**：Argon2id 参数高于 OWASP 最低档并用 PHC 参数支持平滑升级；密码策略以长度 + 离线 blocklist 为主，符合 NIST；三层限流全部落 PostgreSQL，适配多实例且不依赖 Redis；step-up 用会话级 `authenticated_at` 作为权威，避免 token 年龄误判；审计 HMAC 链在数据库层提供可验证的防篡改；密钥、响应头、CSP 与日志脱敏均有明确契约。

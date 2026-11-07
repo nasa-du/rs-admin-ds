@@ -66,12 +66,12 @@
     "hide": "隐藏",
     "clearSelection": "清除选择",
     "clearFilters": "清除筛选",
-    "selected": "已选择 {{count}} 项"
+    "selected_other": "已选择 {{count}} 项"
   },
   "bulkActions": {
     "selected": "已选择",
-    "actionsFor": "{{entity}}：已选择 {{count}} 项",
-    "announcement": "已选择 {{count}} 个{{entity}}。批量操作工具栏可用。",
-    "clearSelection": "清除选择（Esc）"
+    "clearSelection": "清除选择（Esc）",
+    "actionsFor_other": "{{entity}}：已选择 {{count}} 项",
+    "announcement_other": "已选择 {{count}} 个{{entity}}。批量操作工具栏可用。"
   }
 }

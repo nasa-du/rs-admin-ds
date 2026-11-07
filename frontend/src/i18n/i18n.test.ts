@@ -2,6 +2,7 @@ import { clearCookies } from '@/test-utils/cookies'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCookie, setCookie } from '@/lib/cookies'
 import i18n, {
+  createI18nInstance,
   resolveInitialLocale,
   setLocale,
   SUPPORTED_LOCALES,
@@ -86,6 +87,21 @@ describe('i18n', () => {
   it('throws on a missing key outside production', () => {
     expect(() => i18n.t('common:missingKeyForTest' as never)).toThrow(
       /Missing i18n key/
+    )
+  })
+
+  it('selects plural forms from the active locale', () => {
+    const en = createI18nInstance('en-US')
+    const zh = createI18nInstance('zh-CN')
+
+    expect(en.t('bulkActions.actionsFor', { count: 1, entity: 'user' })).toBe(
+      'Bulk actions for 1 selected user'
+    )
+    expect(en.t('bulkActions.actionsFor', { count: 2, entity: 'user' })).toBe(
+      'Bulk actions for 2 selected users'
+    )
+    expect(zh.t('bulkActions.actionsFor', { count: 2, entity: '用户' })).toBe(
+      '用户：已选择 2 项'
     )
   })
 })

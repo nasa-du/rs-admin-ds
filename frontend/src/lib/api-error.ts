@@ -118,7 +118,16 @@ function getRetryAfterHeader(headers: unknown): number | undefined {
   return clampRetryAfter(getHeader(headers, 'retry-after')) ?? undefined
 }
 
-export function getRetryAfterSeconds(error: unknown): number | null {
+const DEFAULT_RETRY_AFTER_SECONDS = 60
+
+/**
+ * Returns the server's `Retry-After` hint in seconds. For a 429 without a
+ * usable hint, falls back to 60 seconds (ADR-0007 §6).
+ */
+export function getRetryAfterSeconds(
+  error: unknown,
+  fallbackSeconds = DEFAULT_RETRY_AFTER_SECONDS
+): number | null {
   const apiError = toApiError(error)
   if (apiError?.retryAfterSeconds != null) return apiError.retryAfterSeconds
 
@@ -132,6 +141,18 @@ export function getRetryAfterSeconds(error: unknown): number | null {
       )
       if (fromHeader != null) return fromHeader
     }
+  }
+
+  const responseStatus =
+    isRecord(error) && isRecord(error.response)
+      ? Number(error.response.status)
+      : undefined
+  const isRateLimited =
+    apiError?.status === 429 ||
+    (isRecord(error) && Number(error.status) === 429) ||
+    responseStatus === 429
+  if (isRateLimited) {
+    return clampRetryAfter(fallbackSeconds) ?? DEFAULT_RETRY_AFTER_SECONDS
   }
 
   return null

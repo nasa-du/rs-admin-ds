@@ -6,7 +6,7 @@
     },
     "forbidden": {
       "title": "无权访问",
-      "description": "你没有查看此资源所需的权限。"
+      "description": "你没有查看此资源所需的权限。如需访问，请联系管理员。"
     },
     "notFound": {
       "title": "页面不存在",

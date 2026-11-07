@@ -11,10 +11,11 @@ import {
   translateErrorCode,
   translateFieldError,
 } from './errors'
-import i18n from './index'
+import { createI18nInstance } from './index'
 
-const t = i18n.getFixedT('en-US') as unknown as ErrorTranslator
-const tZh = i18n.getFixedT('zh-CN') as unknown as ErrorTranslator
+const testI18n = createI18nInstance('zh-CN')
+const t = testI18n.getFixedT('en-US') as unknown as ErrorTranslator
+const tZh = testI18n.getFixedT('zh-CN') as unknown as ErrorTranslator
 
 describe('error resource coverage', () => {
   it('has every mapped key in both locales', () => {
@@ -28,8 +29,8 @@ describe('error resource coverage', () => {
     ]
 
     for (const key of keys) {
-      expect(i18n.exists(key, { lng: 'zh-CN' }), `zh-CN ${key}`).toBe(true)
-      expect(i18n.exists(key, { lng: 'en-US' }), `en-US ${key}`).toBe(true)
+      expect(testI18n.exists(key, { lng: 'zh-CN' }), `zh-CN ${key}`).toBe(true)
+      expect(testI18n.exists(key, { lng: 'en-US' }), `en-US ${key}`).toBe(true)
     }
   })
 })

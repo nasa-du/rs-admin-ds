@@ -35,6 +35,16 @@ function flattenKeys(value: JsonValue, prefix = ''): string[] {
   )
 }
 
+const PLURAL_SUFFIX = /_(zero|one|two|few|many|other)$/
+
+/**
+ * Chinese uses only `_other` while English also needs `_one`, so compare the
+ * base key sets and let each locale carry its own plural variants.
+ */
+function normalizePluralKeys(keys: string[]): string[] {
+  return [...new Set(keys.map((key) => key.replace(PLURAL_SUFFIX, '')))].sort()
+}
+
 function diff(reference: string[], compared: string[]) {
   const comparedSet = new Set(compared)
   const referenceSet = new Set(reference)
@@ -76,12 +86,12 @@ async function main() {
   }
 
   for (const namespace of namespaces) {
-    const baseline = flattenKeys(
-      await readNamespace(BASELINE_LOCALE, namespace)
-    ).sort()
-    const compared = flattenKeys(
-      await readNamespace(COMPARED_LOCALE, namespace)
-    ).sort()
+    const baseline = normalizePluralKeys(
+      flattenKeys(await readNamespace(BASELINE_LOCALE, namespace))
+    )
+    const compared = normalizePluralKeys(
+      flattenKeys(await readNamespace(COMPARED_LOCALE, namespace))
+    )
 
     const { missing, extra } = diff(baseline, compared)
     if (missing.length > 0) {

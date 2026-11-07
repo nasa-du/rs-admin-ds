@@ -1,4 +1,4 @@
-import i18n from 'i18next'
+import i18n, { type InitOptions } from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import { getCookie, setCookie } from '@/lib/cookies'
 import enUSaudit from './locales/en-US/audit.json'
@@ -126,9 +126,9 @@ function missingKeyHandler(
   )
 }
 
-void i18n.use(initReactI18next).init({
+const baseOptions = (locale: Locale): InitOptions => ({
   resources,
-  lng: resolveInitialLocale(),
+  lng: locale,
   fallbackLng: FALLBACK_LOCALE,
   supportedLngs: [...SUPPORTED_LOCALES],
   load: 'currentOnly',
@@ -141,5 +141,18 @@ void i18n.use(initReactI18next).init({
   saveMissing: !import.meta.env.PROD,
   missingKeyHandler,
 })
+
+/**
+ * Creates a standalone i18n instance (without React bindings). Tests use this
+ * so they can run against zh-CN and switch to en-US without mutating the app's
+ * shared instance.
+ */
+export function createI18nInstance(locale: Locale = DEFAULT_LOCALE) {
+  const instance = i18n.createInstance()
+  void instance.init(baseOptions(locale))
+  return instance
+}
+
+void i18n.use(initReactI18next).init(baseOptions(resolveInitialLocale()))
 
 export default i18n

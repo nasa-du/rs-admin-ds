@@ -6,7 +6,7 @@
     },
     "forbidden": {
       "title": "Access Forbidden",
-      "description": "You don't have the necessary permission to view this resource."
+      "description": "You don't have the necessary permission to view this resource. Contact an administrator if you need access."
     },
     "notFound": {
       "title": "Page Not Found",

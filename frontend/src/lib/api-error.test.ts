@@ -50,11 +50,26 @@ describe('api-error', () => {
     ).toBe(3)
   })
 
-  it('ignores invalid Retry-After values', () => {
+  it('ignores invalid Retry-After values without a 429 status', () => {
     expect(
       getRetryAfterSeconds({ response: { headers: { 'retry-after': 'soon' } } })
     ).toBeNull()
     expect(getRetryAfterSeconds(new Error('boom'))).toBeNull()
+  })
+
+  it('falls back to 60 seconds for a 429 without a usable header', () => {
+    expect(getRetryAfterSeconds({ code: 'rate_limited', status: 429 })).toBe(60)
+    expect(
+      getRetryAfterSeconds({
+        response: { status: 429, headers: { 'retry-after': 'soon' } },
+      })
+    ).toBe(60)
+  })
+
+  it('accepts a custom retry fallback', () => {
+    expect(
+      getRetryAfterSeconds({ code: 'rate_limited', status: 429 }, 15)
+    ).toBe(15)
   })
 
   it('reads request ids from ProblemDetails or the X-Request-Id header', () => {

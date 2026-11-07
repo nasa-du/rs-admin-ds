@@ -66,12 +66,15 @@
     "hide": "Hide",
     "clearSelection": "Clear selection",
     "clearFilters": "Clear filters",
-    "selected": "{{count}} selected"
+    "selected_one": "{{count}} selected",
+    "selected_other": "{{count}} selected"
   },
   "bulkActions": {
     "selected": "selected",
-    "actionsFor": "Bulk actions for {{count}} selected {{entity}}",
-    "announcement": "{{count}} {{entity}} selected. Bulk actions toolbar is available.",
-    "clearSelection": "Clear selection (Escape)"
+    "clearSelection": "Clear selection (Escape)",
+    "actionsFor_one": "Bulk actions for {{count}} selected {{entity}}",
+    "actionsFor_other": "Bulk actions for {{count}} selected {{entity}}s",
+    "announcement_one": "{{count}} {{entity}} selected. Bulk actions toolbar is available.",
+    "announcement_other": "{{count}} {{entity}}s selected. Bulk actions toolbar is available."
   }
 }

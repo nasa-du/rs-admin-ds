@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
     "i18n:check": "bun scripts/check-i18n.ts",
     "check": "bun run lint && bun run format:check && bun run typecheck && bun run i18n:check && bun run test && bun run build",
     "preview": "vite preview",

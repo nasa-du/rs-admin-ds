@@ -1,0 +1,32 @@
+[package]
+name = "rs-admin-api"
+description = "Axum HTTP API, middleware and runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+dotenvy.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+rs-admin-config.workspace = true
+rs-admin-domain.workspace = true
+rs-admin-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+
+[lints]
+workspace = true

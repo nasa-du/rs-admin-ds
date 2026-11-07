@@ -1,0 +1,51 @@
+# rs-admin frontend
+
+Frontend for the rs-admin login and permission system. It is a pruned fork of
+[satnaing/shadcn-admin](https://github.com/satnaing/shadcn-admin) (MIT), based
+on snapshot `e16c87f213a5ba5e45964e9b67c792105ec74d26`.
+
+The fork removes the upstream Clerk and mock authentication demos, the tasks,
+apps, chats, help-center, sign-up, forgot-password, OTP, and sign-in-2 pages,
+and the fake dashboard/users data. Authentication, user management, roles, and
+audit-log APIs are integrated by later tickets.
+
+## Requirements
+
+- [Bun](https://bun.sh/) `1.4.2` (pinned in `package.json`)
+- Node.js `>=22.18` for tooling that requires it (orval comes later)
+
+## Commands
+
+```sh
+bun install --frozen-lockfile
+bun run dev
+bun run check
+bun run build
+```
+
+`bun run check` runs ESLint, Prettier, TypeScript, the i18n key-alignment
+check, the browser test suite, and the production build. Install the Playwright
+browser once with:
+
+```sh
+bunx playwright install --with-deps chromium
+```
+
+## Internationalization
+
+- Supported locales: `zh-CN` (default) and `en-US`. Both are statically bundled.
+- The active locale is stored in the `locale` cookie and resolved from
+  `navigator.languages` on first visit.
+- UI copy lives in `src/i18n/locales/<locale>/<namespace>.json`. Namespaces are
+  `common`, `nav`, `auth`, `users`, `roles`, `audit`, `settings`, `errors`, and
+  `validation`.
+- `bun run i18n:check` fails when the zh-CN and en-US key sets differ. Missing
+  keys throw in development and tests.
+- Dates, numbers, and currency use `Intl` through `src/lib/format.ts`.
+- The UI is LTR-only in v1. The direction provider and logical CSS utilities are
+  retained so RTL can be re-enabled later.
+
+## License
+
+The upstream MIT license is preserved in [LICENSE](./LICENSE). Third-party
+notices are listed in [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).

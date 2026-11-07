@@ -1,0 +1,84 @@
+{
+  "pages": {
+    "unauthorized": {
+      "title": "Unauthorized Access",
+      "description": "Please log in with the appropriate credentials to access this resource."
+    },
+    "forbidden": {
+      "title": "Access Forbidden",
+      "description": "You don't have the necessary permission to view this resource."
+    },
+    "notFound": {
+      "title": "Page Not Found",
+      "description": "It seems like the page you're looking for does not exist or might have been removed."
+    },
+    "general": {
+      "title": "Oops! Something went wrong",
+      "description": "We apologize for the inconvenience. Please try again later."
+    },
+    "maintenance": {
+      "title": "Website is under maintenance",
+      "description": "The site is not available at the moment. We'll be back online shortly."
+    }
+  },
+  "actions": {
+    "goBack": "Go Back",
+    "backHome": "Back to Home",
+    "learnMore": "Learn more"
+  },
+  "auth": {
+    "invalid_credentials": "The username or password is incorrect.",
+    "access_token_invalid": "Your access token is invalid. Please sign in again.",
+    "session_invalid": "Your session is no longer valid. Please sign in again.",
+    "session_expired": "Your session has expired. Please sign in again.",
+    "refresh_token_invalid": "Your sign-in state is no longer valid. Please sign in again.",
+    "refresh_reuse_detected": "An abnormal refresh was detected. Please sign in again.",
+    "account_disabled": "This account is disabled. Contact an administrator.",
+    "temporary_password_expired": "Your temporary password has expired. Contact an administrator.",
+    "login_locked": "Too many attempts. This account is temporarily locked. Try again later.",
+    "rate_limited": "Too many sign-in attempts. Please try again later.",
+    "password_change_required": "Change your password before continuing.",
+    "csrf_failed": "Request verification failed. Refresh the page and try again.",
+    "reauth_required": "This action requires reauthentication.",
+    "invalid_current_password": "The current password is incorrect.",
+    "password_policy_violation": "The password does not meet the security requirements.",
+    "password_unchanged": "The new password must be different from the current password."
+  },
+  "role": {
+    "role_immutable": "Built-in roles cannot be modified.",
+    "permission_subset_violation": "You cannot grant permissions beyond your own.",
+    "role_name_taken": "A role with this name already exists.",
+    "role_in_use": "This role is still assigned to users and cannot be deleted.",
+    "unknown_role": "The role does not exist or has been deleted.",
+    "empty_permissions": "A role needs at least one permission.",
+    "invalid_permission": "The request contains an invalid permission."
+  },
+  "user": {
+    "identifier_taken": "This login identifier is already taken.",
+    "self_action_forbidden": "You cannot perform this action on yourself.",
+    "out_of_scope": "The target user is outside your management scope.",
+    "last_super_admin": "At least one active super administrator must remain."
+  },
+  "audit": {
+    "invalid_time_range": "The time range is invalid.",
+    "time_range_too_large": "The time range is too large. Narrow it and try again."
+  },
+  "common": {
+    "unexpected": "An unexpected error occurred. Please try again later.",
+    "network_error": "The network request failed. Check your connection and try again.",
+    "invalid_json": "The request body is not valid JSON.",
+    "unknown_field": "The request contains an unknown field.",
+    "unsupported_media_type": "The request content type is not supported.",
+    "method_not_allowed": "This request method is not allowed.",
+    "payload_too_large": "The request body is too large.",
+    "validation_failed": "Check the input and try again.",
+    "invalid_sort": "The sort parameter is invalid.",
+    "page_size_too_large": "The page size exceeds the limit.",
+    "empty_update": "There is nothing to update.",
+    "forbidden": "You do not have permission to perform this action.",
+    "not_found": "The requested resource does not exist.",
+    "internal_error": "An internal server error occurred. Please try again later.",
+    "service_unavailable": "The service is temporarily unavailable. Please try again later.",
+    "rate_limited": "Too many requests. Please try again later."
+  }
+}

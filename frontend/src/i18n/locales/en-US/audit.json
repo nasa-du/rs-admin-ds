@@ -1,0 +1,8 @@
+{
+  "title": "Audit logs",
+  "description": "Query system audit records.",
+  "empty": {
+    "title": "Audit logs are not connected yet",
+    "description": "Audit event queries and filters will be connected in a later release."
+  }
+}

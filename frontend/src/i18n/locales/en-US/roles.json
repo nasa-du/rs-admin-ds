@@ -1,0 +1,8 @@
+{
+  "title": "Roles",
+  "description": "Manage roles and permissions.",
+  "empty": {
+    "title": "Role management is not connected yet",
+    "description": "The role list, creation, and permission matrix will be connected in a later release."
+  }
+}

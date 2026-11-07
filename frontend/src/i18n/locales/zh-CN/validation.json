@@ -1,0 +1,23 @@
+{
+  "required": "此项为必填项。",
+  "invalid": "输入无效。",
+  "invalid_format": "格式不正确。",
+  "invalid_email": "请输入有效的邮箱地址。",
+  "invalid_url": "请输入有效的链接。",
+  "min_length": "至少需要 {{min}} 个字符。",
+  "max_length": "不能超过 {{max}} 个字符。",
+  "bioMin": "简介至少需要 {{min}} 个字符。",
+  "usernameMin": "用户名至少需要 {{min}} 个字符。",
+  "usernameMax": "用户名不能超过 {{max}} 个字符。",
+  "nameMin": "姓名至少需要 {{min}} 个字符。",
+  "nameMax": "姓名不能超过 {{max}} 个字符。",
+  "selectLanguage": "请选择语言。",
+  "selectNotificationType": "请选择通知类型。",
+  "selectAtLeastOneItem": "请至少选择一项。",
+  "password": {
+    "too_short": "密码长度不足。",
+    "too_long": "密码过长。",
+    "blocklisted": "该密码过于常见，请更换。",
+    "equals_identifier": "密码不能与登录标识相同。"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "groups": {
+    "management": "Management",
+    "settings": "Settings"
+  },
+  "dashboard": "Dashboard",
+  "users": "Users",
+  "settings": "Settings",
+  "profile": "Profile",
+  "account": "Account",
+  "appearance": "Appearance",
+  "notifications": "Notifications",
+  "display": "Display"
+}

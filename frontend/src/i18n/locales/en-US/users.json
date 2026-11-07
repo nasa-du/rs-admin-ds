@@ -1,0 +1,8 @@
+{
+  "title": "Users",
+  "description": "Manage users and their roles.",
+  "empty": {
+    "title": "User list is not connected yet",
+    "description": "Real user data and create, edit, and disable actions will be connected in a later release."
+  }
+}

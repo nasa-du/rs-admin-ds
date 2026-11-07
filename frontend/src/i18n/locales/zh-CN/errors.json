@@ -1,0 +1,84 @@
+{
+  "pages": {
+    "unauthorized": {
+      "title": "未授权访问",
+      "description": "请使用合适的凭据登录后再访问此资源。"
+    },
+    "forbidden": {
+      "title": "无权访问",
+      "description": "你没有查看此资源所需的权限。"
+    },
+    "notFound": {
+      "title": "页面不存在",
+      "description": "你访问的页面不存在或已被移除。"
+    },
+    "general": {
+      "title": "出错了",
+      "description": "抱歉给你带来不便，请稍后重试。"
+    },
+    "maintenance": {
+      "title": "站点维护中",
+      "description": "站点暂时不可用，我们很快会恢复。"
+    }
+  },
+  "actions": {
+    "goBack": "返回上一页",
+    "backHome": "返回首页",
+    "learnMore": "了解更多"
+  },
+  "auth": {
+    "invalid_credentials": "用户名或密码不正确。",
+    "access_token_invalid": "访问令牌无效，请重新登录。",
+    "session_invalid": "会话已失效，请重新登录。",
+    "session_expired": "会话已过期，请重新登录。",
+    "refresh_token_invalid": "登录状态已失效，请重新登录。",
+    "refresh_reuse_detected": "检测到异常刷新，请重新登录。",
+    "account_disabled": "该账号已停用，请联系管理员。",
+    "temporary_password_expired": "临时密码已过期，请联系管理员。",
+    "login_locked": "尝试次数过多，账号已被临时锁定，请稍后再试。",
+    "rate_limited": "登录尝试过于频繁，请稍后再试。",
+    "password_change_required": "请先修改密码后再继续。",
+    "csrf_failed": "请求校验失败，请刷新页面后重试。",
+    "reauth_required": "此操作需要重新验证身份。",
+    "invalid_current_password": "当前密码不正确。",
+    "password_policy_violation": "密码不符合安全要求。",
+    "password_unchanged": "新密码不能与当前密码相同。"
+  },
+  "role": {
+    "role_immutable": "内置角色不可修改。",
+    "permission_subset_violation": "不能授予超出自身权限的权限。",
+    "role_name_taken": "角色名称已存在。",
+    "role_in_use": "该角色仍被用户使用，无法删除。",
+    "unknown_role": "角色不存在或已删除。",
+    "empty_permissions": "角色至少需要一项权限。",
+    "invalid_permission": "包含无效的权限。"
+  },
+  "user": {
+    "identifier_taken": "登录标识已被占用。",
+    "self_action_forbidden": "不能对自己执行此操作。",
+    "out_of_scope": "目标用户超出你的管理范围。",
+    "last_super_admin": "必须保留至少一位启用的超级管理员。"
+  },
+  "audit": {
+    "invalid_time_range": "时间范围无效。",
+    "time_range_too_large": "时间范围过大，请缩小范围。"
+  },
+  "common": {
+    "unexpected": "发生未知错误，请稍后重试。",
+    "network_error": "网络连接失败，请检查网络后重试。",
+    "invalid_json": "请求内容格式错误。",
+    "unknown_field": "请求包含未知字段。",
+    "unsupported_media_type": "不支持的请求内容类型。",
+    "method_not_allowed": "请求方法不被允许。",
+    "payload_too_large": "请求内容过大。",
+    "validation_failed": "请检查输入内容。",
+    "invalid_sort": "排序参数无效。",
+    "page_size_too_large": "每页数量超出上限。",
+    "empty_update": "没有需要更新的内容。",
+    "forbidden": "你没有执行此操作的权限。",
+    "not_found": "请求的资源不存在。",
+    "internal_error": "服务器内部错误，请稍后重试。",
+    "service_unavailable": "服务暂时不可用，请稍后重试。",
+    "rate_limited": "请求过于频繁，请稍后再试。"
+  }
+}

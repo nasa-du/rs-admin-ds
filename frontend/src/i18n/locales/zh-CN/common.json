@@ -1,0 +1,77 @@
+{
+  "appName": "rs-admin",
+  "appTagline": "管理后台",
+  "signedIn": "已登录",
+  "unknownUser": "当前用户",
+  "loading": "加载中...",
+  "skipToMain": "跳到主要内容",
+  "toggleSidebar": "切换侧边栏",
+  "showPassword": "显示密码",
+  "hidePassword": "隐藏密码",
+  "pickDate": "选择日期",
+  "selectPlaceholder": "请选择",
+  "close": "关闭",
+  "sidebar": {
+    "mobileTitle": "侧边栏",
+    "mobileDescription": "显示移动端侧边栏。"
+  },
+  "commandPalette": {
+    "title": "命令面板",
+    "description": "搜索要运行的命令..."
+  },
+  "notAvailableShort": "该功能将在后续版本接入。",
+  "search": {
+    "placeholder": "搜索",
+    "commandPlaceholder": "输入命令或搜索...",
+    "empty": "没有找到结果。",
+    "themeGroup": "主题"
+  },
+  "theme": {
+    "toggle": "切换主题",
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统"
+  },
+  "actions": {
+    "cancel": "取消",
+    "continue": "继续",
+    "reset": "重置",
+    "resetAll": "重置所有设置为默认值"
+  },
+  "welcome": {
+    "title": "欢迎使用 rs-admin",
+    "description": "登录后即可进入管理后台。仪表盘业务数据将在后续版本接入。"
+  },
+  "language": {
+    "label": "语言",
+    "zh-CN": "简体中文",
+    "en-US": "English"
+  },
+  "table": {
+    "filter": "筛选...",
+    "reset": "重置",
+    "view": "查看",
+    "toggleColumns": "切换列",
+    "rowsPerPage": "每页行数",
+    "pageOf": "第 {{page}} / {{total}} 页",
+    "goToFirstPage": "第一页",
+    "goToPreviousPage": "上一页",
+    "goToNextPage": "下一页",
+    "goToLastPage": "最后一页",
+    "goToPage": "第 {{page}} 页",
+    "noResults": "没有结果。",
+    "noResultsFound": "没有找到结果。",
+    "asc": "升序",
+    "desc": "降序",
+    "hide": "隐藏",
+    "clearSelection": "清除选择",
+    "clearFilters": "清除筛选",
+    "selected": "已选择 {{count}} 项"
+  },
+  "bulkActions": {
+    "selected": "已选择",
+    "actionsFor": "{{entity}}：已选择 {{count}} 项",
+    "announcement": "已选择 {{count}} 个{{entity}}。批量操作工具栏可用。",
+    "clearSelection": "清除选择（Esc）"
+  }
+}

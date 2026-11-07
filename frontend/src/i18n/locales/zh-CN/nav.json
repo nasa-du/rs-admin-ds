@@ -1,0 +1,14 @@
+{
+  "groups": {
+    "management": "管理",
+    "settings": "设置"
+  },
+  "dashboard": "仪表盘",
+  "users": "用户",
+  "settings": "设置",
+  "profile": "个人资料",
+  "account": "账户",
+  "appearance": "外观",
+  "notifications": "通知",
+  "display": "显示"
+}

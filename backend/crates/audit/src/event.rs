@@ -309,12 +309,9 @@ pub enum AuditEventError {
 }
 
 fn contains_forbidden_detail_key(details: &Map<String, Value>) -> bool {
-    details.iter().any(|(key, value)| {
-        FORBIDDEN_DETAIL_KEYS
-            .iter()
-            .any(|forbidden| key.eq_ignore_ascii_case(forbidden))
-            || contains_forbidden_key(value)
-    })
+    details
+        .iter()
+        .any(|(key, value)| is_forbidden_detail_key(key) || contains_forbidden_key(value))
 }
 
 fn contains_forbidden_key(value: &Value) -> bool {
@@ -322,5 +319,43 @@ fn contains_forbidden_key(value: &Value) -> bool {
         Value::Object(map) => contains_forbidden_detail_key(map),
         Value::Array(items) => items.iter().any(contains_forbidden_key),
         _ => false,
+    }
+}
+
+/// Exact-key (case-insensitive) match against the never-persist blacklist.
+/// Deliberately not a substring match: `permission_keys`, `key_type` and
+/// `old_kid` are legitimate diagnostics (spec §9.10).
+fn is_forbidden_detail_key(key: &str) -> bool {
+    FORBIDDEN_DETAIL_KEYS
+        .iter()
+        .any(|forbidden| key.eq_ignore_ascii_case(forbidden))
+}
+
+/// Replacement for a value stored under a forbidden key.
+const REDACTED_DETAIL_VALUE: &str = "***";
+
+/// Return a copy of an audit `details` value with every value whose key is on
+/// the never-persist blacklist replaced by `"***"`.
+///
+/// Writes already reject these keys, but the query API applies this on read as
+/// defense in depth for rows written before a key was forbidden or by a
+/// future bug. The blacklist is exact-key and recurses through nested objects
+/// and arrays.
+pub fn redact_forbidden_details(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    let redacted = if is_forbidden_detail_key(key) {
+                        Value::String(REDACTED_DETAIL_VALUE.to_owned())
+                    } else {
+                        redact_forbidden_details(value)
+                    };
+                    (key.clone(), redacted)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(redact_forbidden_details).collect()),
+        scalar => scalar.clone(),
     }
 }

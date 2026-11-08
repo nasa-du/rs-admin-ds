@@ -19,7 +19,10 @@ pub use catalog::{
     UnknownCatalogValue,
 };
 pub use error::{AuditError, ChainBreak, ChainBreakReason, VerifyError};
-pub use event::{AuditActor, AuditEvent, AuditEventBuilder, AuditEventError, AuditTarget};
+pub use event::{
+    AuditActor, AuditEvent, AuditEventBuilder, AuditEventError, AuditTarget,
+    redact_forbidden_details,
+};
 pub use hash::{AuditRow, canonical_audit_row, compute_row_hash};
 pub use jcs::canonical_json;
 pub use verify::{ChainVerification, verify_chain};

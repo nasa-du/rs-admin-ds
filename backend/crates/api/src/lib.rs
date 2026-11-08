@@ -4,6 +4,7 @@
 //! routing failures) carries a server-generated request id, RFC 7807 problem
 //! details where applicable, and the API security headers.
 
+mod audit_logs;
 mod auth;
 mod authz;
 mod browser;

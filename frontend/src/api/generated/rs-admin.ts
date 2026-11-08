@@ -22,6 +22,8 @@ import type {
 } from '@tanstack/react-query'
 import { customInstance } from '../mutator'
 import type {
+  ChangePasswordRequest,
+  ChangePasswordResponse,
   HealthStatus,
   LoginRequest,
   LoginResponse,
@@ -52,6 +54,90 @@ const withQueryKey = <T extends object, K>(
     })
   }
   return result
+}
+
+export const changePassword = (
+  changePasswordRequest: ChangePasswordRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<ChangePasswordResponse>(
+    {
+      url: `/api/v1/auth/change-password`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: changePasswordRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getChangePasswordMutationKey = () => ['changePassword'] as const
+
+export const getChangePasswordMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof changePassword>>,
+    TError,
+    ChangePasswordMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof changePassword>>,
+  TError,
+  ChangePasswordMutationVariables,
+  TContext
+> => {
+  const mutationKey = getChangePasswordMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof changePassword>>,
+    ChangePasswordMutationVariables
+  > = (props) => {
+    const { data } = props ?? {}
+
+    return changePassword(data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type ChangePasswordMutationResult = NonNullable<
+  Awaited<ReturnType<typeof changePassword>>
+>
+export type ChangePasswordMutationBody = ChangePasswordRequest
+export type ChangePasswordMutationError = ProblemDetails
+export type ChangePasswordMutationVariables = { data: ChangePasswordRequest }
+
+export const useChangePassword = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof changePassword>>,
+      TError,
+      ChangePasswordMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof changePassword>>,
+  TError,
+  ChangePasswordMutationVariables,
+  TContext
+> => {
+  return useMutation(getChangePasswordMutationOptions(options), queryClient)
 }
 
 export const login = (

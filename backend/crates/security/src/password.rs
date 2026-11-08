@@ -108,6 +108,12 @@ pub fn exceeds_authentication_limit(password: &str) -> bool {
     normalized.chars().count() > PASSWORD_MAX_CHARS || normalized.len() > PASSWORD_MAX_BYTES
 }
 
+/// Whether two password inputs are the same after the NFC normalization
+/// applied before hashing and verification.
+pub fn passwords_equal(left: &str, right: &str) -> bool {
+    left.nfc().eq(right.nfc())
+}
+
 fn normalize_for_comparison(value: &str) -> String {
     value.nfc().collect::<String>().to_lowercase()
 }

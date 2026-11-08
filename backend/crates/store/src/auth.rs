@@ -286,6 +286,22 @@ pub async fn create_session(
     .map_err(AuthStoreError::Database)
 }
 
+/// Next rotation counter for a session's token family, used when the server
+/// must mint a fresh root instead of deriving from a presented token.
+pub async fn next_rotation_counter(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+) -> Result<i64, AuthStoreError> {
+    sqlx::query_scalar(
+        "SELECT COALESCE(MAX(rotation_counter) + 1, 0)
+         FROM auth_refresh_tokens WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
 /// Persist a refresh token by hash.
 pub async fn insert_refresh_token(
     transaction: &mut Transaction<'_, Postgres>,
@@ -422,6 +438,10 @@ pub const REVOKE_REASON_LOGOUT_ALL: &str = "logout_all";
 /// (spec §5.3).
 pub const REVOKE_REASON_EXCESS_SESSIONS: &str = "excess_sessions";
 
+/// Revocation reason for the other sessions of a user who changed their own
+/// password (spec §5.3, §5.9).
+pub const REVOKE_REASON_PASSWORD_CHANGE: &str = "password_change";
+
 /// Revoke every token in a session's family with the given reason.
 pub async fn revoke_refresh_family(
     transaction: &mut Transaction<'_, Postgres>,
@@ -513,6 +533,54 @@ pub async fn revoke_user_refresh_tokens(
     Ok(result.rows_affected())
 }
 
+/// Revoke every unrevoked session a user owns except the one kept by a
+/// self-service password change. Callers must hold the user row lock so a
+/// concurrent login cannot slip a new session past the sweep.
+pub async fn revoke_other_user_sessions(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    keep_session_id: Uuid,
+    reason: &str,
+) -> Result<u64, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_sessions
+         SET revoked_at = now(), revoke_reason = $3
+         WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(keep_session_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected())
+}
+
+/// Revoke every unrevoked refresh token belonging to a user's other sessions.
+pub async fn revoke_other_user_refresh_tokens(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    keep_session_id: Uuid,
+    reason: &str,
+) -> Result<u64, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_refresh_tokens t
+         SET revoked_at = now(), revoked_reason = $3
+         FROM auth_sessions s
+         WHERE t.session_id = s.id
+           AND s.user_id = $1
+           AND s.id <> $2
+           AND t.revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(keep_session_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected())
+}
+
 /// Increment `users.token_version`, invalidating every access token issued so
 /// far for the user. Returns the new version.
 pub async fn bump_token_version(
@@ -572,6 +640,32 @@ pub async fn load_active_session(
     .bind(session_id)
     .bind(user_id)
     .fetch_optional(pool)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Lock a session row for the rest of the transaction. Returns `None` when the
+/// session is already revoked or idle- or absolute-expired. The caller then
+/// holds the same lock a refresh transaction uses, so a password change and a
+/// token rotation cannot interleave.
+pub async fn lock_active_session(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<AuthSession>, AuthStoreError> {
+    sqlx::query_as(
+        "SELECT id, user_id, created_at, last_seen_at, idle_expires_at,
+                absolute_expires_at, authenticated_at
+         FROM auth_sessions
+         WHERE id = $1 AND user_id = $2
+           AND revoked_at IS NULL
+           AND idle_expires_at > clock_timestamp()
+           AND absolute_expires_at > clock_timestamp()
+         FOR UPDATE",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(AuthStoreError::Database)
 }
@@ -642,6 +736,36 @@ pub async fn replace_password_hash(
     .await
     .map_err(AuthStoreError::Database)?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Finish a self-service password change in one write: replace the hash, clear
+/// the temporary-password markers and bump the token version. Account-level
+/// failure state is left untouched; only login and reauthentication reset it
+/// (spec §8.3). The expected hash guards against a credential reset that
+/// committed after the caller verified the password. Returns the new token
+/// version, or `None` when the stored hash changed.
+pub async fn complete_password_change(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    expected_hash: &str,
+    new_hash: &str,
+) -> Result<Option<i64>, AuthStoreError> {
+    sqlx::query_scalar(
+        "UPDATE users
+         SET password_hash = $3,
+             must_change_password = false,
+             temporary_password_expires_at = NULL,
+             token_version = token_version + 1,
+             updated_at = now()
+         WHERE id = $1 AND password_hash = $2
+         RETURNING token_version",
+    )
+    .bind(user_id)
+    .bind(expected_hash)
+    .bind(new_hash)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
 }
 
 /// Clear account-level failure state after a successful login or
@@ -929,6 +1053,25 @@ pub async fn record_unknown_login_failure(
         failed_count,
         retry_after_seconds,
     })
+}
+
+/// Seconds remaining on one throttle scope's lock, or `None` when it is not
+/// locked.
+pub async fn load_throttle_lock(
+    pool: &PgPool,
+    scope: ThrottleScope,
+    key_hash: &[u8; 32],
+) -> Result<Option<i64>, AuthStoreError> {
+    sqlx::query_scalar(
+        "SELECT CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint
+         FROM auth_login_throttle
+         WHERE scope = $1 AND key_hash = $2 AND locked_until > now()",
+    )
+    .bind(scope.as_str())
+    .bind(key_hash.as_slice())
+    .fetch_optional(pool)
+    .await
+    .map_err(AuthStoreError::Database)
 }
 
 /// Load the lock state of the IP and global layers.

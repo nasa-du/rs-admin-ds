@@ -435,7 +435,7 @@ Set-Cookie: __Host-refresh=<raw>; Path=/; Secure; HttpOnly; SameSite=Strict; Max
 ```
 
 - 不设 `Domain`；host-only 到 `api.example.com`。
-- 服务端只在 `/auth/login`、`/auth/refresh`、`/auth/logout`、`/auth/logout-all` 读取该 Cookie；其他端点忽略 `Cookie`。
+- 服务端只在 `/auth/login`、`/auth/refresh`、`/auth/logout`、`/auth/logout-all`、`/auth/change-password` 读取该 Cookie；其他端点忽略 `Cookie`。`/auth/change-password` 仅用 Bearer 鉴权，读取 Cookie 只为轮换当前会话的 refresh token。
 - 每次刷新轮换；`Max-Age = min(43200, absolute_expires_at - now())`；服务端仍强制 idle/absolute，Cookie 过期时间不是安全边界。
 - **派生式轮换**：`new_raw = base64url(HMAC-SHA256(REFRESH_DERIVATION_KEY, old_raw || ":" || new_counter))`，其中 `new_counter = old.rotation_counter + 1`。数据库仍只存每枚令牌的 SHA-256；`replaced_by_hash` 记录后继；派生密钥独立于 JWT 签名密钥。
 - **30 秒 grace**：旧令牌在其 `used_at` 后 30 秒内再次出现，沿 `replaced_by_hash` 链现算后继，返回当前有效令牌；不新增轮换、不写审计。链上任一步缺失、已撤销或超出 grace → 按刷新重放处理。
@@ -1021,7 +1021,7 @@ sequenceDiagram
 |---|---|---|
 | `authn_login_success` | info | 登录成功（含受限会话） |
 | `authn_login_fail` | warning | 密码错误、未知标识、停用、临时密码过期 |
-| `authn_login_lock` | warning | 账号层达到锁定阈值（登录或重新认证） |
+| `authn_login_lock` | warning | 账号层达到锁定阈值（登录、重新认证或自助改密） |
 | `authn_login_rate_limited` | warning | IP/全局层首次触发锁定 |
 | `authn_logout` | info | 当前会话登出 |
 | `authn_logout_all` | info | 全部会话登出 |
@@ -1078,7 +1078,7 @@ sequenceDiagram
   - 登录失败：`reason_code`（`bad_credentials`/`account_disabled`/`temporary_password_expired`）；未知标识附 `identifier_hmac`。
   - 登录成功/重新认证：`auth_method=password`、`session_id`、`must_change_password`（登录）；`auth_time`（重新认证）。
   - 登出：`session_id`；全部登出：`sessions_revoked_count`。
-  - 锁定/限流：`lock_seconds`、`failure_count`、`source`（`login`/`reauth`）或 `scope`（`ip`/`global`）、`retry_after_seconds`。
+  - 锁定/限流：`lock_seconds`、`failure_count`、`source`（`login`/`reauth`/`change_password`）或 `scope`（`ip`/`global`）、`retry_after_seconds`。
   - 刷新复用：`session_id`、`rotation_counter`、`family_revoked=true`。
   - 会话淘汰：`evicted_session_id`、`new_session_id`。
   - 改密：`sessions_revoked_count`；失败附 `reason_code`。

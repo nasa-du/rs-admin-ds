@@ -6,6 +6,8 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './changePasswordRequest'
+export * from './changePasswordResponse'
 export * from './errorCode'
 export * from './fieldError'
 export * from './healthState'

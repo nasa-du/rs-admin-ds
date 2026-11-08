@@ -234,15 +234,7 @@ async fn logout_all_revokes_every_session_and_bumps_the_token_version(pool: PgPo
 #[sqlx::test(migrations = "../../migrations")]
 async fn logout_all_is_refused_for_a_restricted_session(pool: PgPool) {
     let app = app(&pool).await;
-    let user_id = insert_user(
-        &pool,
-        NewUser {
-            must_change_password: true,
-            temporary_password_expires_at: Some(Utc::now() + Duration::hours(72)),
-            ..NewUser::active("alice", "alice@example.com")
-        },
-    )
-    .await;
+    let user_id = insert_user(&pool, NewUser::restricted("alice", "alice@example.com")).await;
 
     let (status, headers, body) = login(&app, "alice", PASSWORD).await;
     assert_eq!(status, StatusCode::OK, "{body}");

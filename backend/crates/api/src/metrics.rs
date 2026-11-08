@@ -33,6 +33,14 @@ pub fn install_metrics_recorder() -> Result<PrometheusHandle, MetricsError> {
         "http_request_duration_seconds",
         "HTTP request latency in seconds."
     );
+    metrics::describe_counter!(
+        "auth_login_lockouts_total",
+        "Login lockouts grouped by throttle scope."
+    );
+    metrics::describe_gauge!(
+        "auth_global_circuit_open",
+        "Whether the global login circuit is open (1) or closed (0)."
+    );
     metrics::describe_gauge!("build_info", "Build information.");
     metrics::gauge!(
         "build_info",

@@ -6,10 +6,12 @@
 //! connection details.
 
 use chrono::{DateTime, Utc};
+use rs_admin_security::account_lock_seconds;
 use sqlx::{Executor, PgPool, Postgres, Transaction};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::IpAddr;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A user row as needed by the authentication pipeline.
@@ -720,4 +722,370 @@ where
     }
 
     Ok(grants.into_values().collect())
+}
+
+/// The two shared throttle rows in `auth_login_throttle`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThrottleScope {
+    Ip,
+    Global,
+}
+
+impl ThrottleScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ip => "ip",
+            Self::Global => "global",
+        }
+    }
+}
+
+/// Outcome of an atomic account- or throttle-layer failure update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureRecord {
+    /// The failure was counted. `retry_after_seconds` is present when this
+    /// failure crossed a lock threshold.
+    Counted {
+        failed_count: i32,
+        retry_after_seconds: Option<i64>,
+    },
+    /// Another writer locked the scope first; the count was left unchanged.
+    AlreadyLocked { retry_after_seconds: i64 },
+}
+
+/// IP- and global-layer lock state for a login attempt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoginThrottleLocks {
+    pub ip_retry_after_seconds: Option<i64>,
+    pub global_retry_after_seconds: Option<i64>,
+}
+
+impl LoginThrottleLocks {
+    /// Seconds the attempt must wait, taking the stricter layer.
+    pub fn retry_after_seconds(&self) -> Option<i64> {
+        self.ip_retry_after_seconds
+            .into_iter()
+            .chain(self.global_retry_after_seconds)
+            .max()
+    }
+}
+
+/// Seconds remaining on a known user's account lock, or `None` when unlocked.
+pub async fn known_account_lock_seconds<'e, E>(
+    executor: E,
+    user_id: Uuid,
+) -> Result<Option<i64>, AuthStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar(
+        "SELECT CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint
+         FROM users
+         WHERE id = $1 AND locked_until > now()",
+    )
+    .bind(user_id)
+    .fetch_optional(executor)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Seconds remaining on an unknown identifier's account lock.
+pub async fn unknown_account_lock_seconds<'e, E>(
+    executor: E,
+    key_hash: &[u8; 32],
+) -> Result<Option<i64>, AuthStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar(
+        "SELECT CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint
+         FROM auth_login_failures
+         WHERE key_hash = $1 AND locked_until > now()",
+    )
+    .bind(key_hash.as_slice())
+    .fetch_optional(executor)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Atomically count a failure for a known user and apply the account-layer
+/// lock thresholds (spec §8.3). A count older than `decay` restarts at one; a
+/// currently locked account is left untouched.
+pub async fn record_known_login_failure(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    decay: Duration,
+) -> Result<FailureRecord, AuthStoreError> {
+    let failed_count: Option<i32> = sqlx::query_scalar(
+        "UPDATE users
+         SET failed_login_count = CASE
+                 WHEN last_failed_login_at IS NULL
+                      OR last_failed_login_at <= now() - make_interval(secs => $2)
+                 THEN 1
+                 ELSE failed_login_count + 1
+             END,
+             last_failed_login_at = now(),
+             updated_at = now()
+         WHERE id = $1
+           AND (locked_until IS NULL OR locked_until <= now())
+         RETURNING failed_login_count",
+    )
+    .bind(user_id)
+    .bind(decay.as_secs_f64())
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+
+    let Some(failed_count) = failed_count else {
+        let retry_after_seconds = known_account_lock_seconds(&mut **transaction, user_id)
+            .await?
+            .unwrap_or(1);
+        return Ok(FailureRecord::AlreadyLocked {
+            retry_after_seconds,
+        });
+    };
+
+    let retry_after_seconds = match account_lock_seconds(failed_count) {
+        Some(seconds) => {
+            sqlx::query(
+                "UPDATE users
+                 SET locked_until = now() + make_interval(secs => $2),
+                     updated_at = now()
+                 WHERE id = $1",
+            )
+            .bind(user_id)
+            .bind(seconds as f64)
+            .execute(&mut **transaction)
+            .await
+            .map_err(AuthStoreError::Database)?;
+            Some(seconds)
+        }
+        None => None,
+    };
+
+    Ok(FailureRecord::Counted {
+        failed_count,
+        retry_after_seconds,
+    })
+}
+
+/// Atomically count a failure for an unknown identifier. Unknown identifiers
+/// use `auth_login_failures` with the same thresholds and decay as known users.
+pub async fn record_unknown_login_failure(
+    transaction: &mut Transaction<'_, Postgres>,
+    key_hash: &[u8; 32],
+    decay: Duration,
+) -> Result<FailureRecord, AuthStoreError> {
+    let failed_count: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO auth_login_failures AS f (key_hash, failed_count, locked_until, updated_at)
+         VALUES ($1, 1, NULL, now())
+         ON CONFLICT (key_hash) DO UPDATE SET
+             failed_count = CASE
+                 WHEN f.updated_at <= now() - make_interval(secs => $2)
+                 THEN 1
+                 ELSE f.failed_count + 1
+             END,
+             updated_at = now(),
+             locked_until = CASE
+                 WHEN f.locked_until > now() THEN f.locked_until ELSE NULL
+             END
+         WHERE f.locked_until IS NULL OR f.locked_until <= now()
+         RETURNING failed_count",
+    )
+    .bind(key_hash.as_slice())
+    .bind(decay.as_secs_f64())
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+
+    let Some(failed_count) = failed_count else {
+        let retry_after_seconds = unknown_account_lock_seconds(&mut **transaction, key_hash)
+            .await?
+            .unwrap_or(1);
+        return Ok(FailureRecord::AlreadyLocked {
+            retry_after_seconds,
+        });
+    };
+
+    let retry_after_seconds = match account_lock_seconds(failed_count) {
+        Some(seconds) => {
+            sqlx::query(
+                "UPDATE auth_login_failures
+                 SET locked_until = now() + make_interval(secs => $2),
+                     updated_at = now()
+                 WHERE key_hash = $1",
+            )
+            .bind(key_hash.as_slice())
+            .bind(seconds as f64)
+            .execute(&mut **transaction)
+            .await
+            .map_err(AuthStoreError::Database)?;
+            Some(seconds)
+        }
+        None => None,
+    };
+
+    Ok(FailureRecord::Counted {
+        failed_count,
+        retry_after_seconds,
+    })
+}
+
+/// Load the lock state of the IP and global layers.
+pub async fn load_login_throttle_locks(
+    pool: &PgPool,
+    ip_key: &[u8; 32],
+    global_key: &[u8; 32],
+) -> Result<LoginThrottleLocks, AuthStoreError> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT scope, CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint
+         FROM auth_login_throttle
+         WHERE locked_until > now()
+           AND ((scope = 'ip' AND key_hash = $1)
+                OR (scope = 'global' AND key_hash = $2))",
+    )
+    .bind(ip_key.as_slice())
+    .bind(global_key.as_slice())
+    .fetch_all(pool)
+    .await
+    .map_err(AuthStoreError::Database)?;
+
+    let mut locks = LoginThrottleLocks::default();
+    for (scope, seconds) in rows {
+        match scope.as_str() {
+            "ip" => locks.ip_retry_after_seconds = Some(seconds),
+            "global" => locks.global_retry_after_seconds = Some(seconds),
+            _ => {}
+        }
+    }
+    Ok(locks)
+}
+
+/// Atomically count one failure in a fixed window for the IP or global layer.
+///
+/// The `ON CONFLICT ... DO UPDATE ... RETURNING` statement is the unit of
+/// serialization; no `SELECT count(*)` precedes the write. A locked scope
+/// returns no row, which maps to [`FailureRecord::AlreadyLocked`] without
+/// touching the counter.
+pub async fn record_throttle_failure(
+    transaction: &mut Transaction<'_, Postgres>,
+    scope: ThrottleScope,
+    key_hash: &[u8; 32],
+    window: Duration,
+    lock: Duration,
+    limit: i64,
+) -> Result<FailureRecord, AuthStoreError> {
+    let failures: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO auth_login_throttle AS t
+             (scope, key_hash, window_start, failures, locked_until, last_failure_at)
+         VALUES ($1, $2, now(), 1, NULL, now())
+         ON CONFLICT (scope, key_hash) DO UPDATE SET
+             window_start = CASE
+                 WHEN t.window_start <= now() - make_interval(secs => $3)
+                 THEN now()
+                 ELSE t.window_start
+             END,
+             failures = CASE
+                 WHEN t.window_start <= now() - make_interval(secs => $3)
+                 THEN 1
+                 ELSE t.failures + 1
+             END,
+             locked_until = CASE
+                 WHEN t.locked_until > now() THEN t.locked_until ELSE NULL
+             END,
+             last_failure_at = now()
+         WHERE t.locked_until IS NULL OR t.locked_until <= now()
+         RETURNING failures",
+    )
+    .bind(scope.as_str())
+    .bind(key_hash.as_slice())
+    .bind(window.as_secs_f64())
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+
+    let Some(failures) = failures else {
+        let retry_after_seconds = throttle_lock_seconds(&mut **transaction, scope, key_hash)
+            .await?
+            .unwrap_or(1);
+        return Ok(FailureRecord::AlreadyLocked {
+            retry_after_seconds,
+        });
+    };
+
+    let retry_after_seconds = if i64::from(failures) >= limit {
+        let seconds = sqlx::query_scalar(
+            "UPDATE auth_login_throttle
+             SET locked_until = now() + make_interval(secs => $3)
+             WHERE scope = $1 AND key_hash = $2
+             RETURNING CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint",
+        )
+        .bind(scope.as_str())
+        .bind(key_hash.as_slice())
+        .bind(lock.as_secs_f64())
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(AuthStoreError::Database)?;
+        Some(seconds)
+    } else {
+        None
+    };
+
+    Ok(FailureRecord::Counted {
+        failed_count: failures,
+        retry_after_seconds,
+    })
+}
+
+async fn throttle_lock_seconds<'e, E>(
+    executor: E,
+    scope: ThrottleScope,
+    key_hash: &[u8; 32],
+) -> Result<Option<i64>, AuthStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar(
+        "SELECT CEIL(EXTRACT(EPOCH FROM (locked_until - now())))::bigint
+         FROM auth_login_throttle
+         WHERE scope = $1 AND key_hash = $2 AND locked_until > now()",
+    )
+    .bind(scope.as_str())
+    .bind(key_hash.as_slice())
+    .fetch_optional(executor)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Clear the global circuit once its lock has elapsed and report whether this
+/// caller observed the release. The row keeps its window count, implementing a
+/// half-open probe: a later failure inside the same window is a fresh
+/// threshold crossing and re-opens the circuit for another lock period.
+/// Exactly one instance wins the update, so each release is announced once.
+pub async fn release_expired_global_throttle(pool: &PgPool) -> Result<bool, AuthStoreError> {
+    let released: Option<i32> = sqlx::query_scalar(
+        "UPDATE auth_login_throttle
+         SET locked_until = NULL
+         WHERE scope = $1 AND locked_until IS NOT NULL AND locked_until <= now()
+         RETURNING failures",
+    )
+    .bind(ThrottleScope::Global.as_str())
+    .fetch_optional(pool)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(released.is_some())
+}
+
+/// Clear the unknown-identifier account row after a successful login. A user
+/// created after earlier failures must not inherit the stale lock state.
+pub async fn clear_unknown_login_failures(
+    transaction: &mut Transaction<'_, Postgres>,
+    key_hash: &[u8; 32],
+) -> Result<(), AuthStoreError> {
+    sqlx::query("DELETE FROM auth_login_failures WHERE key_hash = $1")
+        .bind(key_hash.as_slice())
+        .execute(&mut **transaction)
+        .await
+        .map_err(AuthStoreError::Database)?;
+    Ok(())
 }

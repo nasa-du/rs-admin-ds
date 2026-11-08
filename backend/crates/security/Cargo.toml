@@ -13,6 +13,7 @@ base64.workspace = true
 ed25519-dalek = { version = "2.1.1", features = ["pkcs8"] }
 getrandom.workspace = true
 hmac.workspace = true
+ipnet.workspace = true
 jsonwebtoken.workspace = true
 secrecy.workspace = true
 serde.workspace = true

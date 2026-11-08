@@ -8,16 +8,20 @@
 
 use axum::Router;
 use axum::body::{Body, Bytes};
+use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use rs_admin_api::{AppState, AuthServices, build_router};
-use rs_admin_config::{AuditChainConfig, JwtConfig, RotationKeys, SecurityConfig};
-use rs_admin_security::{AuditKeyRing, HmacKey, JwtIssuer, JwtSigningKey, PasswordService};
+use rs_admin_config::{AuditChainConfig, AuthSettings, JwtConfig, RotationKeys, SecurityConfig};
+use rs_admin_security::{
+    AuditKeyRing, HmacKey, JwtIssuer, JwtSigningKey, PasswordService, TrustedProxies,
+};
 use rs_admin_store::Database;
 use sqlx::PgPool;
+use std::net::SocketAddr;
 use std::sync::OnceLock;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -80,11 +84,21 @@ pub fn password_service() -> &'static PasswordService {
     })
 }
 
+/// Spec-default throttle settings; tests override individual fields.
+pub fn auth_settings() -> AuthSettings {
+    AuthSettings::from_source(&|_| None).expect("default auth settings")
+}
+
 fn auth_services() -> &'static AuthServices {
     static SERVICES: OnceLock<AuthServices> = OnceLock::new();
     SERVICES.get_or_init(|| {
-        AuthServices::with_password_service(&security_config(), password_service().clone())
-            .expect("auth services")
+        AuthServices::with_password_service(
+            &security_config(),
+            password_service().clone(),
+            auth_settings(),
+            TrustedProxies::default(),
+        )
+        .expect("auth services")
     })
 }
 
@@ -93,14 +107,26 @@ pub fn token_verifier() -> JwtIssuer {
     JwtIssuer::new(ISSUER, AUDIENCE, KID, &signing_key()).expect("verifier")
 }
 
-/// Build a full router over the test database.
+/// Build a full router over the test database with spec-default settings.
 pub async fn app(pool: &PgPool) -> Router {
+    app_with(pool, auth_settings(), TrustedProxies::default()).await
+}
+
+/// Build a router with custom throttle settings and trusted proxies.
+pub async fn app_with(pool: &PgPool, settings: AuthSettings, proxies: TrustedProxies) -> Router {
     rs_admin_store::rbac::sync_catalog(pool)
         .await
         .expect("catalog sync");
+    let services = AuthServices::with_password_service(
+        &security_config(),
+        password_service().clone(),
+        settings,
+        proxies,
+    )
+    .expect("auth services");
     build_router(AppState::with_auth(
         Database::from_pool(pool.clone()),
-        auth_services().clone(),
+        services,
     ))
 }
 
@@ -241,7 +267,18 @@ pub fn authorized_request(
     }
 }
 
-pub async fn send(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap, Bytes) {
+/// Send a request, defaulting the TCP peer to loopback when the test did not
+/// choose one. Production always supplies `ConnectInfo` from the listener.
+pub async fn send(app: Router, mut request: Request<Body>) -> (StatusCode, HeaderMap, Bytes) {
+    if request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .is_none()
+    {
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+    }
     let response = app.oneshot(request).await.expect("infallible");
     let status = response.status();
     let headers = response.headers().clone();
@@ -249,6 +286,51 @@ pub async fn send(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap
         .await
         .expect("body");
     (status, headers, body)
+}
+
+/// A JSON request from an explicit TCP peer, with extra headers such as
+/// `X-Forwarded-For`.
+pub fn request_from(
+    method: &str,
+    uri: &str,
+    body: &serde_json::Value,
+    peer: SocketAddr,
+    extra_headers: &[(&str, &str)],
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder
+        .body(Body::from(serde_json::to_vec(body).expect("json")))
+        .expect("request");
+    request.extensions_mut().insert(ConnectInfo(peer));
+    request
+}
+
+/// Log in from an explicit TCP peer with optional extra request headers.
+pub async fn login_from(
+    app: &Router,
+    identifier: &str,
+    password: &str,
+    peer: SocketAddr,
+    extra_headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, serde_json::Value) {
+    let (status, headers, body) = send(
+        app.clone(),
+        request_from(
+            "POST",
+            "/api/v1/auth/login",
+            &serde_json::json!({ "identifier": identifier, "password": password }),
+            peer,
+            extra_headers,
+        ),
+    )
+    .await;
+    (status, headers, json(&body))
 }
 
 pub fn json(body: &[u8]) -> serde_json::Value {

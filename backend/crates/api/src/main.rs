@@ -4,6 +4,7 @@ use rs_admin_api::{
     spawn_metrics_upkeep, store_pool_settings,
 };
 use rs_admin_config::Config;
+use rs_admin_security::TrustedProxies;
 use rs_admin_store::Database;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -48,9 +49,17 @@ async fn run() -> Result<()> {
     rs_admin_store::rbac::sync_catalog(database.pool()).await?;
     tracing::info!("permission catalog synchronized");
 
+    if config.app_env.is_production() && config.trusted_proxy_cidrs.is_empty() {
+        tracing::warn!(
+            "TRUSTED_PROXY_CIDRS is empty; X-Forwarded-For is ignored and every request is \
+             attributed to its direct peer"
+        );
+    }
+
     // Build all keyed services before serving: an unusable key is a startup
     // failure, never a per-request 500.
-    let auth = AuthServices::new(&config.security, &config.auth)?;
+    let trusted_proxies = TrustedProxies::new(config.trusted_proxy_cidrs.clone());
+    let auth = AuthServices::new(&config.security, &config.auth, trusted_proxies)?;
     tracing::info!("authentication services initialized");
 
     let metrics_handle = install_metrics_recorder()?;
@@ -65,9 +74,14 @@ async fn run() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let api_shutdown = shutdown_rx.clone();
     let api_task = tokio::spawn(async move {
-        axum::serve(api_listener, app)
-            .with_graceful_shutdown(wait_for_shutdown(api_shutdown))
-            .await
+        // Client IP throttling and audit depend on the TCP peer, so the
+        // listener must publish `ConnectInfo<SocketAddr>` to handlers.
+        axum::serve(
+            api_listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_for_shutdown(api_shutdown))
+        .await
     });
     let metrics_task = tokio::spawn(async move {
         axum::serve(metrics_listener, metrics_router(metrics_handle))

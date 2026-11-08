@@ -23,7 +23,7 @@ async fn unreachable_database_is_unready_without_leaking_details() {
 
 #[test]
 fn applied_version_must_exactly_match_the_embedded_migrator() {
-    let expected = 20261107000000;
+    let expected = 20261108000000;
 
     assert_eq!(
         Readiness::from_migration_versions(Some(expected), expected),

@@ -6,6 +6,7 @@
 //! database stores its SHA-256 digest. Access tokens are EdDSA JWTs kept in the
 //! client's memory and never persisted.
 
+use crate::client_ip::ClientIp;
 use crate::error::ApiError;
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
@@ -13,7 +14,7 @@ use crate::router::AppState;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{FromRequestParts, State};
-use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE, USER_AGENT};
+use axum::http::header::{AUTHORIZATION, COOKIE, RETRY_AFTER, SET_COOKIE, USER_AGENT};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -27,24 +28,30 @@ use rs_admin_domain::identity::{Email, Username};
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleGrant};
 use rs_admin_security::{
-    HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError, PasswordService, TokenError,
-    VerifyOutcome, derive_refresh_token, exceeds_authentication_limit, generate_refresh_token,
-    hash_refresh_token, identifier_hmac_hex,
+    ClientIpResolution, HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError,
+    PasswordService, TokenError, TrustedProxies, VerifyOutcome, derive_refresh_token,
+    exceeds_authentication_limit, generate_refresh_token, global_throttle_key, hash_refresh_token,
+    identifier_hmac_hex, identifier_throttle_key, ip_throttle_key,
 };
 use rs_admin_store::Database;
 use rs_admin_store::audit::transaction_now;
 use rs_admin_store::auth::{
-    AuthSession, AuthUser, NewRefreshToken, NewSession, REVOKE_REASON_EXCESS_SESSIONS,
-    REVOKE_REASON_LOGOUT, REVOKE_REASON_LOGOUT_ALL, REVOKE_REASON_TOKEN_REUSE, RefreshContext,
-    UserRole, bump_token_version, count_active_sessions, create_session, database_clock_now,
+    AuthSession, AuthUser, FailureRecord, NewRefreshToken, NewSession,
+    REVOKE_REASON_EXCESS_SESSIONS, REVOKE_REASON_LOGOUT, REVOKE_REASON_LOGOUT_ALL,
+    REVOKE_REASON_TOKEN_REUSE, RefreshContext, ThrottleScope, UserRole, bump_token_version,
+    clear_unknown_login_failures, count_active_sessions, create_session, database_clock_now,
     find_oldest_active_sessions, find_refresh_token, find_user_by_email, find_user_by_id,
-    find_user_by_username, insert_refresh_token, load_active_session, load_role_grants,
-    lock_refresh_context, lock_user_row, mark_refresh_token_rotated, record_login_failure,
-    replace_password_hash, reset_login_failures, revoke_session_family, revoke_user_refresh_tokens,
-    revoke_user_sessions, touch_authenticated_at, touch_session_activity, update_successful_login,
+    find_user_by_username, insert_refresh_token, known_account_lock_seconds, load_active_session,
+    load_login_throttle_locks, load_role_grants, lock_refresh_context, lock_user_row,
+    mark_refresh_token_rotated, record_known_login_failure, record_throttle_failure,
+    record_unknown_login_failure, release_expired_global_throttle, replace_password_hash,
+    reset_login_failures, revoke_session_family, revoke_user_refresh_tokens, revoke_user_sessions,
+    touch_authenticated_at, touch_session_activity, unknown_account_lock_seconds,
+    update_successful_login,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
+use std::net::IpAddr;
 use std::str::FromStr;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -88,14 +95,20 @@ pub struct AuthServices {
     audit: AuditWriter,
     throttle_key: HmacKey,
     refresh_derivation: RotationKeys,
+    settings: AuthSettings,
+    trusted_proxies: TrustedProxies,
 }
 
 impl AuthServices {
     /// Build the JWT codec, Argon2 service and audit writer from validated
     /// configuration. Fails startup when key material cannot be used.
-    pub fn new(security: &SecurityConfig, auth: &AuthSettings) -> Result<Self, AuthServiceError> {
+    pub fn new(
+        security: &SecurityConfig,
+        auth: &AuthSettings,
+        trusted_proxies: TrustedProxies,
+    ) -> Result<Self, AuthServiceError> {
         let passwords = PasswordService::new(auth.password_hash_concurrency)?;
-        Self::with_password_service(security, passwords)
+        Self::with_password_service(security, passwords, auth.clone(), trusted_proxies)
     }
 
     /// Build the remaining services around an existing password service. This
@@ -103,6 +116,8 @@ impl AuthServices {
     pub fn with_password_service(
         security: &SecurityConfig,
         passwords: PasswordService,
+        settings: AuthSettings,
+        trusted_proxies: TrustedProxies,
     ) -> Result<Self, AuthServiceError> {
         let jwt = JwtIssuer::new(
             &security.jwt.issuer,
@@ -117,7 +132,19 @@ impl AuthServices {
             audit: AuditWriter::new(security.audit_chain.keys.clone()),
             throttle_key: security.throttle_key.clone(),
             refresh_derivation: security.refresh_derivation.clone(),
+            settings,
+            trusted_proxies,
         })
+    }
+
+    /// Resolve the client address from the TCP peer and `X-Forwarded-For`.
+    /// The caller logs a warning when the resolution fell back to the peer.
+    pub fn resolve_client_ip(
+        &self,
+        peer: IpAddr,
+        forwarded_for: Option<&str>,
+    ) -> ClientIpResolution {
+        self.trusted_proxies.resolve(peer, forwarded_for)
     }
 }
 
@@ -320,14 +347,54 @@ pub async fn login(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
+    client_ip: ClientIp,
     ApiJson(payload): ApiJson<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
-    let user_agent = user_agent(&headers);
+    let audit = AuditContext {
+        request_id: request_id.0,
+        user_agent: user_agent(&headers),
+        client_ip: client_ip.0,
+    };
     let identifier = payload.identifier.trim().to_owned();
     let normalized = normalize_identifier(&identifier);
 
+    // Throttle state is keyed by the normalized identifier when it parses,
+    // otherwise by the trimmed input, so that case and Unicode variants cannot
+    // be used to rotate the key.
+    let throttle_identifier = match &normalized {
+        Some(LoginIdentifier::Username(value)) | Some(LoginIdentifier::Email(value)) => {
+            value.clone()
+        }
+        None => identifier.clone(),
+    };
+    let identifier_key = identifier_throttle_key(&services.throttle_key, &throttle_identifier);
+
+    // The IP and global layers are checked before any hashing: a locked layer
+    // refuses without paying for Argon2 (spec §8.3).
+    ensure_shared_layers_unlocked(services, &state, audit.client_ip).await?;
+
     let user = find_user(&state.database, normalized.as_ref()).await?;
+
+    // The account layer still runs one dummy verification while locked so the
+    // response cannot distinguish a locked account from a merely wrong
+    // password (spec §8.3).
+    let account_lock = match &user {
+        Some(user) => known_account_lock_seconds(state.database.pool(), user.id)
+            .await
+            .map_err(dependency_unavailable)?,
+        None => unknown_account_lock_seconds(state.database.pool(), &identifier_key)
+            .await
+            .map_err(dependency_unavailable)?,
+    };
+    if let Some(seconds) = account_lock {
+        services
+            .passwords
+            .verify_dummy()
+            .await
+            .map_err(password_unavailable)?;
+        return Err(login_locked(seconds));
+    }
 
     let outcome = verify_password(services, &payload.password, user.as_ref()).await?;
     let password_matches = outcome.as_ref().is_some_and(|outcome| outcome.valid);
@@ -335,51 +402,40 @@ pub async fn login(
     match (user, password_matches) {
         (Some(user), true) => {
             let outcome = outcome.expect("verified password has an outcome");
-            complete_login(
-                &state,
-                services,
-                user,
-                outcome.replacement_hash,
-                request_id.0,
-                user_agent,
-            )
-            .await
+            complete_login(&state, services, user, outcome.replacement_hash, audit).await
         }
         (Some(user), false) => {
-            record_failed_login(
+            let lock = record_counted_failure(
                 &state,
                 services,
-                &user,
-                LoginFailure {
-                    request_id: request_id.0,
-                    user_agent,
-                    reason: "bad_credentials",
-                    result: AuditResult::Failure,
-                    increment_counter: true,
+                FailureIdentity {
+                    user: Some(&user),
+                    identifier_key: None,
+                    identifier_hmac: None,
                 },
+                &audit,
+                AuditAction::AuthnLoginFail,
+                FailureSource::Login,
             )
             .await?;
-            Err(ApiError::new(ErrorCode::InvalidCredentials))
+            Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error))
         }
         (None, _) => {
-            // Throttle state is keyed by the normalized identifier when it
-            // parses, otherwise by the trimmed input, so that case and Unicode
-            // variants cannot be used to rotate the key.
-            let hmac_identifier = match &normalized {
-                Some(LoginIdentifier::Username(value)) | Some(LoginIdentifier::Email(value)) => {
-                    value.clone()
-                }
-                None => identifier.clone(),
-            };
-            record_unknown_login_failure(
+            let identifier_hmac = identifier_hmac_hex(&services.throttle_key, &throttle_identifier);
+            let lock = record_counted_failure(
                 &state,
                 services,
-                &hmac_identifier,
-                request_id.0,
-                user_agent,
+                FailureIdentity {
+                    user: None,
+                    identifier_key: Some(&identifier_key),
+                    identifier_hmac: Some(&identifier_hmac),
+                },
+                &audit,
+                AuditAction::AuthnLoginFail,
+                FailureSource::Login,
             )
             .await?;
-            Err(ApiError::new(ErrorCode::InvalidCredentials))
+            Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error))
         }
     }
 }
@@ -463,6 +519,16 @@ pub async fn get_me(principal: Authenticated) -> Json<UserSelfResponse> {
             headers(("X-Request-Id" = String, description = "Server-generated request id"))
         ),
         (
+            status = 429,
+            description = "Login throttled",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("Retry-After" = String, description = "Seconds until the next attempt"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
             status = 503,
             description = "Authentication service unavailable",
             body = crate::error::ProblemDetails,
@@ -475,6 +541,7 @@ pub async fn reauthenticate(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
+    client_ip: ClientIp,
     principal: Authenticated,
     ApiJson(payload): ApiJson<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, ApiError> {
@@ -482,12 +549,47 @@ pub async fn reauthenticate(
     if principal.user.must_change_password {
         return Err(ApiError::new(ErrorCode::PasswordChangeRequired));
     }
-    let user_agent = user_agent(&headers);
+    let audit = AuditContext {
+        request_id: request_id.0,
+        user_agent: user_agent(&headers),
+        client_ip: client_ip.0,
+    };
+
+    // Reauthentication is subject to the IP/global layers and, like login,
+    // counts failures at the account layer (spec §8.3). The global circuit
+    // deliberately covers login and reauthentication only.
+    ensure_shared_layers_unlocked(services, &state, audit.client_ip).await?;
+    if let Some(seconds) = known_account_lock_seconds(state.database.pool(), principal.user.id)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        services
+            .passwords
+            .verify_dummy()
+            .await
+            .map_err(password_unavailable)?;
+        return Err(login_locked(seconds));
+    }
 
     let outcome = verify_password(services, &payload.password, Some(&principal.user)).await?;
     if !outcome.as_ref().is_some_and(|outcome| outcome.valid) {
-        record_failed_reauth(&state, services, &principal.user, request_id.0, user_agent).await?;
-        return Err(ApiError::new(ErrorCode::InvalidCurrentPassword));
+        let lock = record_counted_failure(
+            &state,
+            services,
+            FailureIdentity {
+                user: Some(&principal.user),
+                identifier_key: None,
+                identifier_hmac: None,
+            },
+            &audit,
+            AuditAction::AuthnReauthFail,
+            FailureSource::Reauth,
+        )
+        .await?;
+        return Err(lock.map_or_else(
+            || ApiError::new(ErrorCode::InvalidCurrentPassword),
+            lock_error,
+        ));
     }
     let outcome = outcome.expect("verified password has an outcome");
 
@@ -502,6 +604,16 @@ pub async fn reauthenticate(
         .await
         .map_err(dependency_unavailable)?
         .ok_or_else(ApiError::session_invalid)?;
+
+    // Close the same race as login: a lock established after the pre-check
+    // still refuses the step-up.
+    if let Some(seconds) = known_account_lock_seconds(&mut *transaction, locked.id)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        transaction.rollback().await.ok();
+        return Err(login_locked(seconds));
+    }
     if locked.token_version != principal.user.token_version
         || locked.password_hash != principal.user.password_hash
     {
@@ -547,8 +659,9 @@ pub async fn reauthenticate(
         )
         .detail("auth_method", "password")
         .detail("session_id", principal.session.id.to_string())
-        .detail("auth_time", authenticated_at.timestamp()),
-        user_agent,
+        .detail("auth_time", authenticated_at.timestamp())
+        .ip(audit.client_ip),
+        audit.user_agent,
     )
     .build()
     .map_err(audit_event_invalid)?;
@@ -628,6 +741,7 @@ pub async fn refresh(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
+    client_ip: ClientIp,
     ApiJson(_payload): ApiJson<RefreshRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
@@ -708,6 +822,7 @@ pub async fn refresh(
                         &mut transaction,
                         services,
                         &context,
+                        client_ip.0,
                         request_id.0,
                         user_agent,
                     )
@@ -722,6 +837,7 @@ pub async fn refresh(
                 &mut transaction,
                 services,
                 &context,
+                client_ip.0,
                 request_id.0,
                 user_agent,
             )
@@ -761,6 +877,7 @@ pub async fn logout(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
+    client_ip: ClientIp,
     ApiJson(_payload): ApiJson<LogoutRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
@@ -811,7 +928,8 @@ pub async fn logout(
             request_id.0,
         )
         .target(TargetType::Session, Some(session_id), None)
-        .detail("session_id", session_id.to_string()),
+        .detail("session_id", session_id.to_string())
+        .ip(client_ip.0),
         user_agent(&headers),
     )
     .build()
@@ -872,6 +990,7 @@ pub async fn logout_all(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
+    client_ip: ClientIp,
     principal: Authenticated,
     ApiJson(_payload): ApiJson<LogoutRequest>,
 ) -> Result<Response, ApiError> {
@@ -927,7 +1046,8 @@ pub async fn logout_all(
             Some(locked.id),
             Some(locked.username.clone()),
         )
-        .detail("sessions_revoked_count", sessions_revoked as i64),
+        .detail("sessions_revoked_count", sessions_revoked as i64)
+        .ip(client_ip.0),
         user_agent,
     )
     .build()
@@ -1075,6 +1195,7 @@ async fn reject_refresh_reuse(
     transaction: &mut Transaction<'_, Postgres>,
     services: &AuthServices,
     context: &RefreshContext,
+    client_ip: IpAddr,
     request_id: Uuid,
     user_agent: Option<String>,
 ) -> Result<ApiError, ApiError> {
@@ -1096,7 +1217,8 @@ async fn reject_refresh_reuse(
         .target(TargetType::Session, Some(context.token.session_id), None)
         .detail("session_id", context.token.session_id.to_string())
         .detail("rotation_counter", context.token.rotation_counter)
-        .detail("family_revoked", true),
+        .detail("family_revoked", true)
+        .ip(client_ip),
         user_agent,
     )
     .build()
@@ -1210,8 +1332,7 @@ async fn complete_login(
     services: &AuthServices,
     user: AuthUser,
     replacement_hash: Option<String>,
-    request_id: Uuid,
-    user_agent: Option<String>,
+    audit: AuditContext,
 ) -> Result<Response, ApiError> {
     let mut transaction = state
         .database
@@ -1225,41 +1346,48 @@ async fn complete_login(
         .map_err(dependency_unavailable)?
         .ok_or_else(ApiError::session_invalid)?;
 
+    // A concurrent failure may have locked the account after the pre-check but
+    // before this transaction acquired the row. The lock always wins, even
+    // over a correct password (spec §8.3).
+    if let Some(seconds) = known_account_lock_seconds(&mut *transaction, locked.id)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        transaction.rollback().await.ok();
+        return Err(login_locked(seconds));
+    }
+
     // A concurrent credential reset invalidates the verification we just
     // performed.
     if locked.password_hash != user.password_hash {
         transaction.rollback().await.ok();
-        record_failed_login(
+        let lock = record_counted_failure(
             state,
             services,
-            &user,
-            LoginFailure {
-                request_id,
-                user_agent,
-                reason: "bad_credentials",
-                result: AuditResult::Failure,
-                increment_counter: true,
+            FailureIdentity {
+                user: Some(&user),
+                identifier_key: None,
+                identifier_hmac: None,
             },
+            &audit,
+            AuditAction::AuthnLoginFail,
+            FailureSource::Login,
         )
         .await?;
-        return Err(ApiError::new(ErrorCode::InvalidCredentials));
+        return Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error));
     }
 
     // Account-state refusals are only revealed after a successful password
     // check, and never increment the failure counter.
     if !locked.is_active() {
         transaction.rollback().await.ok();
-        record_failed_login(
+        record_refused_login(
             state,
             services,
             &locked,
-            LoginFailure {
-                request_id,
-                user_agent,
-                reason: "account_disabled",
-                result: AuditResult::Denied,
-                increment_counter: false,
-            },
+            "account_disabled",
+            AuditResult::Denied,
+            &audit,
         )
         .await?;
         return Err(ApiError::new(ErrorCode::AccountDisabled));
@@ -1272,17 +1400,13 @@ async fn complete_login(
         .map_err(dependency_unavailable)?;
     if locked.temporary_password_expired(authenticated_at) {
         transaction.rollback().await.ok();
-        record_failed_login(
+        record_refused_login(
             state,
             services,
             &locked,
-            LoginFailure {
-                request_id,
-                user_agent,
-                reason: "temporary_password_expired",
-                result: AuditResult::Denied,
-                increment_counter: false,
-            },
+            "temporary_password_expired",
+            AuditResult::Denied,
+            &audit,
         )
         .await?;
         return Err(ApiError::new(ErrorCode::TemporaryPasswordExpired));
@@ -1325,8 +1449,8 @@ async fn complete_login(
             idle_expires_at,
             absolute_expires_at,
             authenticated_at,
-            ip: None,
-            user_agent: user_agent.clone(),
+            ip: Some(audit.client_ip),
+            user_agent: audit.user_agent.clone(),
         },
     )
     .await
@@ -1347,6 +1471,15 @@ async fn complete_login(
     update_successful_login(&mut transaction, locked.id, replacement_hash.as_deref())
         .await
         .map_err(dependency_unavailable)?;
+    // A successful login resets the account layer only. Stale
+    // unknown-identifier rows for either login identifier are account-layer
+    // state too.
+    for identifier in [&locked.username, &locked.email] {
+        let key = identifier_throttle_key(&services.throttle_key, identifier);
+        clear_unknown_login_failures(&mut transaction, &key)
+            .await
+            .map_err(dependency_unavailable)?;
+    }
 
     let roles = load_role_grants(&mut *transaction, locked.id)
         .await
@@ -1359,12 +1492,13 @@ async fn complete_login(
                 AuditAction::AuthnSessionEvicted,
                 AuditResult::Success,
                 AuditActor::user(locked.id, locked.username.clone()),
-                request_id,
+                audit.request_id,
             )
             .target(TargetType::Session, Some(*evicted_session_id), None)
             .detail("evicted_session_id", evicted_session_id.to_string())
-            .detail("new_session_id", session_id.to_string()),
-            user_agent.clone(),
+            .detail("new_session_id", session_id.to_string())
+            .ip(audit.client_ip),
+            audit.user_agent.clone(),
         )
         .build()
         .map_err(audit_event_invalid)?;
@@ -1380,13 +1514,14 @@ async fn complete_login(
             AuditAction::AuthnLoginSuccess,
             AuditResult::Success,
             AuditActor::user(locked.id, locked.username.clone()),
-            request_id,
+            audit.request_id,
         )
         .target(TargetType::Session, Some(session_id), None)
         .detail("auth_method", "password")
         .detail("session_id", session_id.to_string())
-        .detail("must_change_password", locked.must_change_password),
-        user_agent,
+        .detail("must_change_password", locked.must_change_password)
+        .ip(audit.client_ip),
+        audit.user_agent,
     )
     .build()
     .map_err(audit_event_invalid)?;
@@ -1420,19 +1555,280 @@ async fn complete_login(
     Ok((StatusCode::OK, [(SET_COOKIE, cookie)], Json(body)).into_response())
 }
 
-struct LoginFailure {
-    request_id: Uuid,
-    user_agent: Option<String>,
-    reason: &'static str,
-    result: AuditResult,
-    increment_counter: bool,
+/// Which account or IP row a counted failure belongs to.
+struct FailureIdentity<'a> {
+    /// Known user, or `None` for an unknown identifier.
+    user: Option<&'a AuthUser>,
+    /// Throttle key for the unknown-identifier account row; required when
+    /// `user` is `None`.
+    identifier_key: Option<&'a [u8; 32]>,
+    /// HMAC recorded on the audit event for unknown identifiers.
+    identifier_hmac: Option<&'a str>,
 }
 
-async fn record_failed_login(
+#[derive(Clone, Copy)]
+enum FailureSource {
+    Login,
+    Reauth,
+}
+
+impl FailureSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Login => "login",
+            Self::Reauth => "reauth",
+        }
+    }
+}
+
+/// Per-request audit fields shared by every event written for one attempt.
+#[derive(Clone, Debug)]
+struct AuditContext {
+    request_id: Uuid,
+    user_agent: Option<String>,
+    client_ip: IpAddr,
+}
+
+/// A refusal caused by a lock, ready to become a 429 problem response.
+struct LockRefusal {
+    code: ErrorCode,
+    retry_after_seconds: i64,
+}
+
+fn lock_error(refusal: LockRefusal) -> ApiError {
+    let seconds = refusal.retry_after_seconds.max(1).to_string();
+    let value = HeaderValue::from_str(&seconds).expect("retry seconds are header-safe");
+    ApiError::new(refusal.code).with_header(RETRY_AFTER, value)
+}
+
+fn rate_limited(retry_after_seconds: i64) -> ApiError {
+    lock_error(LockRefusal {
+        code: ErrorCode::RateLimited,
+        retry_after_seconds,
+    })
+}
+
+fn login_locked(retry_after_seconds: i64) -> ApiError {
+    lock_error(LockRefusal {
+        code: ErrorCode::LoginLocked,
+        retry_after_seconds,
+    })
+}
+
+/// Enforce the IP and global layers before any password hashing so a locked
+/// shared layer refuses cheaply. An elapsed global circuit is announced and
+/// cleared here, giving the required release alert.
+async fn ensure_shared_layers_unlocked(
+    services: &AuthServices,
+    state: &AppState,
+    client_ip: IpAddr,
+) -> Result<(), ApiError> {
+    if release_expired_global_throttle(state.database.pool())
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        // Application log fields are restricted to the ADR-0005 §9.2
+        // whitelist; the message alone is the alert.
+        tracing::warn!("global login throttle released");
+    }
+
+    // Blocked attempts return 429 without another audit row. The catalog
+    // defines the lock events as threshold-crossing moments, and one row per
+    // blocked request would serialize every login on the audit chain head
+    // (exactly the DoS amplification the spec warns about).
+
+    let ip_key = ip_throttle_key(&services.throttle_key, client_ip);
+    let global_key = global_throttle_key(&services.throttle_key);
+    let locks = load_login_throttle_locks(state.database.pool(), &ip_key, &global_key)
+        .await
+        .map_err(dependency_unavailable)?;
+    metrics::gauge!("auth_global_circuit_open").set(
+        if locks.global_retry_after_seconds.is_some() {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    match locks.retry_after_seconds() {
+        Some(seconds) => Err(rate_limited(seconds)),
+        None => Ok(()),
+    }
+}
+
+/// Count one bad credential at all three layers and write the failure plus any
+/// threshold audit events in the same transaction. Returns a refusal when one
+/// of the layers is (or just became) locked.
+async fn record_counted_failure(
+    state: &AppState,
+    services: &AuthServices,
+    identity: FailureIdentity<'_>,
+    audit: &AuditContext,
+    audit_action: AuditAction,
+    source: FailureSource,
+) -> Result<Option<LockRefusal>, ApiError> {
+    let settings = &services.settings;
+    let ip_key = ip_throttle_key(&services.throttle_key, audit.client_ip);
+    let global_key = global_throttle_key(&services.throttle_key);
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let account = match identity.user {
+        Some(user) => {
+            record_known_login_failure(&mut transaction, user.id, settings.account_failure_decay)
+                .await
+        }
+        None => {
+            let key = identity
+                .identifier_key
+                .expect("unknown identifiers carry a throttle key");
+            record_unknown_login_failure(&mut transaction, key, settings.account_failure_decay)
+                .await
+        }
+    }
+    .map_err(dependency_unavailable)?;
+
+    let ip = record_throttle_failure(
+        &mut transaction,
+        ThrottleScope::Ip,
+        &ip_key,
+        settings.login_ip_window,
+        settings.login_ip_lock,
+        i64::from(settings.login_ip_failure_limit),
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+    let global = record_throttle_failure(
+        &mut transaction,
+        ThrottleScope::Global,
+        &global_key,
+        settings.login_global_window,
+        settings.login_global_lock,
+        i64::from(settings.login_global_circuit_limit),
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+
+    let (actor, target) = match identity.user {
+        Some(user) => (
+            AuditActor::user(user.id, user.username.clone()),
+            (TargetType::User, Some(user.id), Some(user.username.clone())),
+        ),
+        None => (AuditActor::anonymous(), (TargetType::System, None, None)),
+    };
+    let (lock_target_type, lock_target_id, lock_target_label) =
+        (target.0, target.1, target.2.clone());
+
+    // The failure itself. Unknown identifiers record only a keyed HMAC.
+    let mut failure = AuditEvent::builder(
+        audit_action,
+        AuditResult::Failure,
+        actor.clone(),
+        audit.request_id,
+    )
+    .target(target.0, target.1, target.2)
+    .detail("reason_code", "bad_credentials")
+    .ip(audit.client_ip);
+    if let Some(identifier_hmac) = identity.identifier_hmac {
+        failure = failure.detail("identifier_hmac", identifier_hmac);
+    }
+    write_audit_event(
+        &mut transaction,
+        services,
+        failure,
+        audit.user_agent.clone(),
+    )
+    .await?;
+
+    // An account-layer threshold reached by this failure.
+    if let FailureRecord::Counted {
+        failed_count,
+        retry_after_seconds: Some(seconds),
+    } = account
+    {
+        let lock = AuditEvent::builder(
+            AuditAction::AuthnLoginLock,
+            AuditResult::Denied,
+            actor.clone(),
+            audit.request_id,
+        )
+        .target(lock_target_type, lock_target_id, lock_target_label)
+        .detail("lock_seconds", seconds)
+        .detail("failure_count", failed_count)
+        .detail("source", source.as_str())
+        .detail("retry_after_seconds", seconds)
+        .ip(audit.client_ip);
+        write_audit_event(&mut transaction, services, lock, audit.user_agent.clone()).await?;
+        metrics::counter!("auth_login_lockouts_total", "scope" => "account").increment(1);
+    }
+
+    // The first failure that crosses an IP/global lock threshold.
+    for (scope, record) in [(ThrottleScope::Ip, ip), (ThrottleScope::Global, global)] {
+        if let FailureRecord::Counted {
+            failed_count,
+            retry_after_seconds: Some(seconds),
+        } = record
+        {
+            let event = AuditEvent::builder(
+                AuditAction::AuthnLoginRateLimited,
+                AuditResult::Denied,
+                actor.clone(),
+                audit.request_id,
+            )
+            .detail("scope", scope.as_str())
+            .detail("lock_seconds", seconds)
+            .detail("failure_count", failed_count)
+            .detail("retry_after_seconds", seconds)
+            .ip(audit.client_ip);
+            write_audit_event(&mut transaction, services, event, audit.user_agent.clone()).await?;
+            metrics::counter!("auth_login_lockouts_total", "scope" => scope.as_str()).increment(1);
+            if scope == ThrottleScope::Global {
+                metrics::gauge!("auth_global_circuit_open").set(1.0);
+            }
+        }
+    }
+
+    if let FailureRecord::Counted { failed_count, .. } = global
+        && i64::from(failed_count) == i64::from(settings.login_global_alert_limit)
+    {
+        // ADR-0005 §9.2 restricts application log fields; the alert is the
+        // stable message itself.
+        tracing::warn!("global login failure alert threshold reached");
+    }
+
+    transaction.commit().await.map_err(dependency_unavailable)?;
+
+    // IP/global refusals take precedence over an account lock so the client
+    // backs off once for the whole address or service.
+    let shared_retry = [retry_seconds(&ip), retry_seconds(&global)]
+        .into_iter()
+        .flatten()
+        .max();
+    Ok(match shared_retry {
+        Some(seconds) => Some(LockRefusal {
+            code: ErrorCode::RateLimited,
+            retry_after_seconds: seconds,
+        }),
+        None => retry_seconds(&account).map(|seconds| LockRefusal {
+            code: ErrorCode::LoginLocked,
+            retry_after_seconds: seconds,
+        }),
+    })
+}
+
+/// Audit a refusal that is revealed only after a correct password (disabled
+/// account, expired temporary password). These do not touch any counter.
+async fn record_refused_login(
     state: &AppState,
     services: &AuthServices,
     user: &AuthUser,
-    failure: LoginFailure,
+    reason: &'static str,
+    result: AuditResult,
+    audit: &AuditContext,
 ) -> Result<(), ApiError> {
     let mut transaction = state
         .database
@@ -1441,104 +1837,47 @@ async fn record_failed_login(
         .await
         .map_err(dependency_unavailable)?;
 
-    if failure.increment_counter {
-        record_login_failure(&mut transaction, user.id)
-            .await
-            .map_err(dependency_unavailable)?;
-    }
-
-    let event = with_user_agent(
-        AuditEvent::builder(
-            AuditAction::AuthnLoginFail,
-            failure.result,
-            AuditActor::user(user.id, user.username.clone()),
-            failure.request_id,
-        )
-        .target(TargetType::User, Some(user.id), Some(user.username.clone()))
-        .detail("reason_code", failure.reason),
-        failure.user_agent,
+    let event = AuditEvent::builder(
+        AuditAction::AuthnLoginFail,
+        result,
+        AuditActor::user(user.id, user.username.clone()),
+        audit.request_id,
     )
-    .build()
-    .map_err(audit_event_invalid)?;
-    services
-        .audit
-        .write_in_tx(&mut transaction, &event)
-        .await
-        .map_err(audit_unavailable)?;
+    .target(TargetType::User, Some(user.id), Some(user.username.clone()))
+    .detail("reason_code", reason)
+    .ip(audit.client_ip);
+    write_audit_event(&mut transaction, services, event, audit.user_agent.clone()).await?;
 
     transaction.commit().await.map_err(dependency_unavailable)
 }
 
-async fn record_unknown_login_failure(
-    state: &AppState,
+async fn write_audit_event(
+    transaction: &mut Transaction<'_, Postgres>,
     services: &AuthServices,
-    identifier: &str,
-    request_id: Uuid,
+    builder: AuditEventBuilder,
     user_agent: Option<String>,
 ) -> Result<(), ApiError> {
-    let event = with_user_agent(
-        AuditEvent::builder(
-            AuditAction::AuthnLoginFail,
-            AuditResult::Failure,
-            AuditActor::anonymous(),
-            request_id,
-        )
-        .target(TargetType::System, None, None)
-        .detail("reason_code", "bad_credentials")
-        .detail(
-            "identifier_hmac",
-            identifier_hmac_hex(&services.throttle_key, identifier),
-        ),
-        user_agent,
-    )
-    .build()
-    .map_err(audit_event_invalid)?;
-
+    let event = with_user_agent(builder, user_agent)
+        .build()
+        .map_err(audit_event_invalid)?;
     services
         .audit
-        .write(state.database.pool(), &event)
+        .write_in_tx(transaction, &event)
         .await
         .map_err(audit_unavailable)?;
     Ok(())
 }
 
-async fn record_failed_reauth(
-    state: &AppState,
-    services: &AuthServices,
-    user: &AuthUser,
-    request_id: Uuid,
-    user_agent: Option<String>,
-) -> Result<(), ApiError> {
-    let mut transaction = state
-        .database
-        .pool()
-        .begin()
-        .await
-        .map_err(dependency_unavailable)?;
-    record_login_failure(&mut transaction, user.id)
-        .await
-        .map_err(dependency_unavailable)?;
-
-    let event = with_user_agent(
-        AuditEvent::builder(
-            AuditAction::AuthnReauthFail,
-            AuditResult::Failure,
-            AuditActor::user(user.id, user.username.clone()),
-            request_id,
-        )
-        .target(TargetType::User, Some(user.id), Some(user.username.clone()))
-        .detail("reason_code", "bad_credentials"),
-        user_agent,
-    )
-    .build()
-    .map_err(audit_event_invalid)?;
-    services
-        .audit
-        .write_in_tx(&mut transaction, &event)
-        .await
-        .map_err(audit_unavailable)?;
-
-    transaction.commit().await.map_err(dependency_unavailable)
+fn retry_seconds(record: &FailureRecord) -> Option<i64> {
+    match *record {
+        FailureRecord::Counted {
+            retry_after_seconds,
+            ..
+        } => retry_after_seconds,
+        FailureRecord::AlreadyLocked {
+            retry_after_seconds,
+        } => Some(retry_after_seconds),
+    }
 }
 
 fn user_self(

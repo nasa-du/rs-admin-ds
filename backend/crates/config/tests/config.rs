@@ -533,6 +533,26 @@ fn invalid_app_env_and_cidrs_are_rejected() {
 }
 
 #[test]
+fn empty_trusted_proxy_cidrs_disable_forwarded_headers() {
+    let mut map = base();
+    map.remove("TRUSTED_PROXY_CIDRS");
+    assert!(
+        load(&map)
+            .expect("missing list is allowed")
+            .trusted_proxy_cidrs
+            .is_empty()
+    );
+
+    map.insert("TRUSTED_PROXY_CIDRS".into(), String::new());
+    assert!(
+        load(&map)
+            .expect("empty list is allowed")
+            .trusted_proxy_cidrs
+            .is_empty()
+    );
+}
+
+#[test]
 fn origin_config_type_is_public_and_usable() {
     let mut map = base();
     let config = load(&map).expect("valid config");

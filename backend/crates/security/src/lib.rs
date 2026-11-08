@@ -6,6 +6,7 @@
 
 pub mod jwt;
 pub mod password;
+pub mod throttle;
 pub mod token;
 
 pub use jwt::{
@@ -16,6 +17,10 @@ pub use password::{
     ARGON2_MEMORY_KIB, ARGON2_OUTPUT_BYTES, ARGON2_PARALLELISM, ARGON2_TIME_COST,
     PASSWORD_MAX_BYTES, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, PasswordError, PasswordPolicy,
     PasswordService, PolicyViolation, VerifyOutcome, exceeds_authentication_limit,
+};
+pub use throttle::{
+    ClientIpResolution, ClientIpSource, TrustedProxies, account_lock_seconds, global_throttle_key,
+    identifier_throttle_key, ip_throttle_key, normalize_ip,
 };
 pub use token::{
     REFRESH_TOKEN_BYTES, TokenError, derive_refresh_token, generate_refresh_token,

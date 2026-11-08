@@ -199,7 +199,9 @@ impl Config {
             "CORS_ALLOWED_ORIGINS",
             app_env,
         )?;
-        let trusted_proxy_cidrs = parse_cidrs(&required(&lookup, "TRUSTED_PROXY_CIDRS")?)?;
+        // An empty list is valid: forwarding headers are then ignored and only
+        // the TCP peer address is used (spec §8.4).
+        let trusted_proxy_cidrs = parse_cidrs(&lookup("TRUSTED_PROXY_CIDRS").unwrap_or_default())?;
 
         let security = SecurityConfig::from_source(&lookup)?;
         let auth = AuthSettings::from_source(&lookup)?;
@@ -321,6 +323,9 @@ fn parse_origins(
 
 fn parse_cidrs(raw: &str) -> Result<Vec<IpNet>, ConfigError> {
     let mut cidrs = Vec::new();
+    if raw.trim().is_empty() {
+        return Ok(cidrs);
+    }
     for part in raw.split(',') {
         let part = part.trim();
         if part.is_empty() {

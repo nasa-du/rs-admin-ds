@@ -5,6 +5,7 @@
 //! details where applicable, and the API security headers.
 
 mod auth;
+mod client_ip;
 mod error;
 mod json;
 mod logging;

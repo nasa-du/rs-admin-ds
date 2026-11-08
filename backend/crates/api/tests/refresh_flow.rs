@@ -572,7 +572,7 @@ async fn concurrent_refreshes_share_one_rotation(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn grace_retries_survive_a_derivation_key_rotation(pool: PgPool) {
     use rs_admin_api::{AppState, AuthServices, build_router};
-    use rs_admin_security::HmacKey;
+    use rs_admin_security::{HmacKey, TrustedProxies};
     use rs_admin_store::Database;
 
     rs_admin_store::rbac::sync_catalog(&pool)
@@ -584,8 +584,13 @@ async fn grace_retries_survive_a_derivation_key_rotation(pool: PgPool) {
     let old_config = auth_support::security_config();
     let old_app = build_router(AppState::with_auth(
         Database::from_pool(pool.clone()),
-        AuthServices::with_password_service(&old_config, auth_support::password_service().clone())
-            .expect("old services"),
+        AuthServices::with_password_service(
+            &old_config,
+            auth_support::password_service().clone(),
+            auth_support::auth_settings(),
+            TrustedProxies::default(),
+        )
+        .expect("old services"),
     ));
     let (status, login_headers, _body) = login(&old_app, "alice", PASSWORD).await;
     assert_eq!(status, StatusCode::OK);
@@ -603,8 +608,13 @@ async fn grace_retries_survive_a_derivation_key_rotation(pool: PgPool) {
         Some(auth_support::security_config().refresh_derivation.current);
     let new_app = build_router(AppState::with_auth(
         Database::from_pool(pool.clone()),
-        AuthServices::with_password_service(&new_config, auth_support::password_service().clone())
-            .expect("new services"),
+        AuthServices::with_password_service(
+            &new_config,
+            auth_support::password_service().clone(),
+            auth_support::auth_settings(),
+            TrustedProxies::default(),
+        )
+        .expect("new services"),
     ));
 
     let (status, headers, body) = send(new_app, refresh_request(Some(&original))).await;

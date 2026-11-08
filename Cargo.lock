@@ -1771,6 +1771,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "ed25519-dalek",
+ "ipnet",
  "metrics",
  "metrics-exporter-prometheus",
  "rs-admin-audit",
@@ -1841,6 +1842,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "hmac 0.12.1",
+ "ipnet",
  "jsonwebtoken",
  "secrecy",
  "serde",
@@ -1858,6 +1860,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "rs-admin-domain",
+ "rs-admin-security",
  "serde_json",
  "sqlx",
  "thiserror",

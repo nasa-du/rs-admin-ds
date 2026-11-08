@@ -33,6 +33,17 @@ pub const AUDIT_KEY_ID: &str = "audit-2026-11";
 pub const KEY_B64: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
 pub const PASSWORD: &str = "correct horse battery staple";
 
+/// The development admin origin; tests trust exactly this origin.
+pub const TEST_ORIGIN: &str = "http://localhost:5173";
+
+/// Header every cookie-authenticated endpoint requires (spec §7.11).
+pub const CSRF_HEADER: &str = "x-requested-with";
+pub const CSRF_VALUE: &str = "XMLHttpRequest";
+
+pub fn allowed_origins() -> Vec<String> {
+    vec![TEST_ORIGIN.to_owned()]
+}
+
 fn private_pem() -> String {
     SigningKey::from_bytes(&[7u8; 32])
         .to_pkcs8_pem(LineEnding::LF)
@@ -124,10 +135,10 @@ pub async fn app_with(pool: &PgPool, settings: AuthSettings, proxies: TrustedPro
         proxies,
     )
     .expect("auth services");
-    build_router(AppState::with_auth(
-        Database::from_pool(pool.clone()),
-        services,
-    ))
+    build_router(
+        AppState::with_auth(Database::from_pool(pool.clone()), services)
+            .with_allowed_origins(allowed_origins()),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -220,11 +231,14 @@ pub fn request(method: &str, uri: &str) -> Request<Body> {
         .expect("request")
 }
 
+/// A JSON request from the trusted admin origin carrying the CSRF header.
 pub fn json_request(method: &str, uri: &str, body: &serde_json::Value) -> Request<Body> {
     Request::builder()
         .method(method)
         .uri(uri)
         .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .header(CSRF_HEADER, CSRF_VALUE)
         .body(Body::from(serde_json::to_vec(body).expect("json")))
         .expect("request")
 }
@@ -235,7 +249,9 @@ pub fn refresh_request(raw: Option<&str>) -> Request<Body> {
     let builder = Request::builder()
         .method("POST")
         .uri("/api/v1/auth/refresh")
-        .header(header::CONTENT_TYPE, "application/json");
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .header(CSRF_HEADER, CSRF_VALUE);
     let builder = match raw {
         Some(raw) => builder.header(header::COOKIE, format!("__Host-refresh={raw}")),
         None => builder,
@@ -249,7 +265,9 @@ pub fn logout_request(raw: Option<&str>) -> Request<Body> {
     let builder = Request::builder()
         .method("POST")
         .uri("/api/v1/auth/logout")
-        .header(header::CONTENT_TYPE, "application/json");
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .header(CSRF_HEADER, CSRF_VALUE);
     let builder = match raw {
         Some(raw) => builder.header(header::COOKIE, format!("__Host-refresh={raw}")),
         None => builder,
@@ -269,7 +287,8 @@ pub fn change_password_request(
         .method("POST")
         .uri("/api/v1/auth/change-password")
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::CONTENT_TYPE, "application/json");
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, TEST_ORIGIN);
     if let Some(raw) = raw_refresh {
         builder = builder.header(header::COOKIE, format!("__Host-refresh={raw}"));
     }
@@ -293,7 +312,9 @@ pub fn authorized_request(
     let builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::ORIGIN, TEST_ORIGIN)
+        .header(CSRF_HEADER, CSRF_VALUE);
     match body {
         Some(body) => builder
             .header(header::CONTENT_TYPE, "application/json")
@@ -355,6 +376,17 @@ pub async fn login_from(
     peer: SocketAddr,
     extra_headers: &[(&str, &str)],
 ) -> (StatusCode, HeaderMap, serde_json::Value) {
+    // Defaults come last so a test that overrides a header in `extra_headers`
+    // wins: `HeaderMap::get` returns the first value.
+    let mut headers = extra_headers.to_vec();
+    for (name, value) in [("origin", TEST_ORIGIN), (CSRF_HEADER, CSRF_VALUE)] {
+        if !headers
+            .iter()
+            .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
+        {
+            headers.push((name, value));
+        }
+    }
     let (status, headers, body) = send(
         app.clone(),
         request_from(
@@ -362,7 +394,7 @@ pub async fn login_from(
             "/api/v1/auth/login",
             &serde_json::json!({ "identifier": identifier, "password": password }),
             peer,
-            extra_headers,
+            &headers,
         ),
     )
     .await;

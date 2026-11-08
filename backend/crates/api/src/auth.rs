@@ -12,6 +12,7 @@
 //! may extract [`SessionPrincipal`]. Extracting the raw principal elsewhere
 //! would let a temporary-password session bypass the forced change.
 
+use crate::browser::CsrfProtected;
 use crate::client_ip::ClientIp;
 use crate::error::{ApiError, FieldError};
 use crate::json::ApiJson;
@@ -346,6 +347,11 @@ pub struct LogoutRequest {}
     path = "/api/v1/auth/login",
     tag = "Auth",
     operation_id = "login",
+    params((
+        "X-Requested-With" = String,
+        Header,
+        description = "Required CSRF header; must be exactly `XMLHttpRequest`"
+    )),
     request_body = LoginRequest,
     responses(
         (
@@ -369,7 +375,7 @@ pub struct LogoutRequest {}
         ),
         (
             status = 403,
-            description = "Account disabled or temporary password expired",
+            description = "Account disabled, temporary password expired or CSRF validation failed",
             body = crate::error::ProblemDetails,
             content_type = "application/problem+json",
             headers(("X-Request-Id" = String, description = "Server-generated request id"))
@@ -398,6 +404,7 @@ pub async fn login(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     client_ip: ClientIp,
+    _csrf: CsrfProtected,
     ApiJson(payload): ApiJson<LoginRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
@@ -1043,6 +1050,11 @@ pub async fn change_password(
     tag = "Auth",
     operation_id = "refreshToken",
     security(("refreshCookie" = [])),
+    params((
+        "X-Requested-With" = String,
+        Header,
+        description = "Required CSRF header; must be exactly `XMLHttpRequest`"
+    )),
     request_body = RefreshRequest,
     responses(
         (
@@ -1067,7 +1079,7 @@ pub async fn change_password(
         ),
         (
             status = 403,
-            description = "Account disabled",
+            description = "Account disabled or CSRF validation failed",
             body = crate::error::ProblemDetails,
             content_type = "application/problem+json",
             headers(("X-Request-Id" = String, description = "Server-generated request id"))
@@ -1086,6 +1098,7 @@ pub async fn refresh(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     client_ip: ClientIp,
+    _csrf: CsrfProtected,
     ApiJson(_payload): ApiJson<RefreshRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
@@ -1194,6 +1207,11 @@ pub async fn refresh(
     tag = "Auth",
     operation_id = "logout",
     security(("refreshCookie" = [])),
+    params((
+        "X-Requested-With" = String,
+        Header,
+        description = "Required CSRF header; must be exactly `XMLHttpRequest`"
+    )),
     request_body = LogoutRequest,
     responses(
         (
@@ -1203,6 +1221,13 @@ pub async fn refresh(
                 ("Set-Cookie" = String, description = "Cleared host-only refresh cookie"),
                 ("X-Request-Id" = String, description = "Server-generated request id")
             )
+        ),
+        (
+            status = 403,
+            description = "CSRF validation failed",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
         ),
         (
             status = 503,
@@ -1218,6 +1243,7 @@ pub async fn logout(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     client_ip: ClientIp,
+    _csrf: CsrfProtected,
     ApiJson(_payload): ApiJson<LogoutRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
@@ -1290,6 +1316,11 @@ pub async fn logout(
     tag = "Auth",
     operation_id = "logoutAll",
     security(("bearerAuth" = [])),
+    params((
+        "X-Requested-With" = String,
+        Header,
+        description = "Required CSRF header; must be exactly `XMLHttpRequest`"
+    )),
     request_body = LogoutRequest,
     responses(
         (
@@ -1312,7 +1343,7 @@ pub async fn logout(
         ),
         (
             status = 403,
-            description = "Account disabled or a password change is required",
+            description = "Account disabled, a password change is required or CSRF validation failed",
             body = crate::error::ProblemDetails,
             content_type = "application/problem+json",
             headers(("X-Request-Id" = String, description = "Server-generated request id"))
@@ -1331,6 +1362,7 @@ pub async fn logout_all(
     Extension(request_id): Extension<RequestId>,
     headers: HeaderMap,
     client_ip: ClientIp,
+    _csrf: CsrfProtected,
     principal: Authenticated,
     ApiJson(_payload): ApiJson<LogoutRequest>,
 ) -> Result<Response, ApiError> {

@@ -173,6 +173,17 @@
           "Auth"
         ],
         "operationId": "login",
+        "parameters": [
+          {
+            "name": "X-Requested-With",
+            "in": "header",
+            "description": "Required CSRF header; must be exactly `XMLHttpRequest`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -233,7 +244,7 @@
             }
           },
           "403": {
-            "description": "Account disabled or temporary password expired",
+            "description": "Account disabled, temporary password expired or CSRF validation failed",
             "headers": {
               "X-Request-Id": {
                 "schema": {
@@ -301,6 +312,17 @@
           "Auth"
         ],
         "operationId": "logout",
+        "parameters": [
+          {
+            "name": "X-Requested-With",
+            "in": "header",
+            "description": "Required CSRF header; must be exactly `XMLHttpRequest`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -326,6 +348,24 @@
                   "type": "string"
                 },
                 "description": "Server-generated request id"
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF validation failed",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
               }
             }
           },
@@ -361,6 +401,17 @@
           "Auth"
         ],
         "operationId": "logoutAll",
+        "parameters": [
+          {
+            "name": "X-Requested-With",
+            "in": "header",
+            "description": "Required CSRF header; must be exactly `XMLHttpRequest`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -414,7 +465,7 @@
             }
           },
           "403": {
-            "description": "Account disabled or a password change is required",
+            "description": "Account disabled, a password change is required or CSRF validation failed",
             "headers": {
               "X-Request-Id": {
                 "schema": {
@@ -683,6 +734,17 @@
           "Auth"
         ],
         "operationId": "refreshToken",
+        "parameters": [
+          {
+            "name": "X-Requested-With",
+            "in": "header",
+            "description": "Required CSRF header; must be exactly `XMLHttpRequest`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -749,7 +811,7 @@
             }
           },
           "403": {
-            "description": "Account disabled",
+            "description": "Account disabled or CSRF validation failed",
             "headers": {
               "X-Request-Id": {
                 "schema": {

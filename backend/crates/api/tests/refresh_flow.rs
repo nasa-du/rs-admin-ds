@@ -582,16 +582,19 @@ async fn grace_retries_survive_a_derivation_key_rotation(pool: PgPool) {
 
     // The first process rotates a token with its current derivation key.
     let old_config = auth_support::security_config();
-    let old_app = build_router(AppState::with_auth(
-        Database::from_pool(pool.clone()),
-        AuthServices::with_password_service(
-            &old_config,
-            auth_support::password_service().clone(),
-            auth_support::auth_settings(),
-            TrustedProxies::default(),
+    let old_app = build_router(
+        AppState::with_auth(
+            Database::from_pool(pool.clone()),
+            AuthServices::with_password_service(
+                &old_config,
+                auth_support::password_service().clone(),
+                auth_support::auth_settings(),
+                TrustedProxies::default(),
+            )
+            .expect("old services"),
         )
-        .expect("old services"),
-    ));
+        .with_allowed_origins(auth_support::allowed_origins()),
+    );
     let (status, login_headers, _body) = login(&old_app, "alice", PASSWORD).await;
     assert_eq!(status, StatusCode::OK);
     let original = refresh_cookie(&login_headers);
@@ -606,16 +609,19 @@ async fn grace_retries_survive_a_derivation_key_rotation(pool: PgPool) {
     new_config.refresh_derivation.current = HmacKey::from_bytes(vec![9u8; 32]).expect("new key");
     new_config.refresh_derivation.previous =
         Some(auth_support::security_config().refresh_derivation.current);
-    let new_app = build_router(AppState::with_auth(
-        Database::from_pool(pool.clone()),
-        AuthServices::with_password_service(
-            &new_config,
-            auth_support::password_service().clone(),
-            auth_support::auth_settings(),
-            TrustedProxies::default(),
+    let new_app = build_router(
+        AppState::with_auth(
+            Database::from_pool(pool.clone()),
+            AuthServices::with_password_service(
+                &new_config,
+                auth_support::password_service().clone(),
+                auth_support::auth_settings(),
+                TrustedProxies::default(),
+            )
+            .expect("new services"),
         )
-        .expect("new services"),
-    ));
+        .with_allowed_origins(auth_support::allowed_origins()),
+    );
 
     let (status, headers, body) = send(new_app, refresh_request(Some(&original))).await;
     assert_eq!(status, StatusCode::OK, "{:?}", json(&body));

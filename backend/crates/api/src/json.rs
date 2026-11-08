@@ -44,7 +44,7 @@ where
     }
 }
 
-fn has_json_content_type(headers: &HeaderMap) -> bool {
+pub(crate) fn has_json_content_type(headers: &HeaderMap) -> bool {
     headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

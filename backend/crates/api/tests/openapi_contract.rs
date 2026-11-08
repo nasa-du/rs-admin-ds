@@ -277,6 +277,52 @@ fn logout_operations_are_documented_with_stable_ids_and_their_auth_scheme() {
 }
 
 #[test]
+fn cookie_endpoints_document_the_required_csrf_header() {
+    let doc = document();
+
+    for path in [
+        "/api/v1/auth/login",
+        "/api/v1/auth/refresh",
+        "/api/v1/auth/logout",
+        "/api/v1/auth/logout-all",
+    ] {
+        let parameters = doc["paths"][path]["post"]["parameters"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{path} must document its header parameters"));
+        let header = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "X-Requested-With")
+            .unwrap_or_else(|| panic!("{path} must document X-Requested-With"));
+        assert_eq!(header["in"], "header", "{path}");
+        assert_eq!(header["required"], true, "{path}");
+        assert_eq!(header["schema"]["type"], "string", "{path}");
+    }
+
+    // These endpoints authenticate by Bearer only and require no CSRF header.
+    for path in [
+        "/api/v1/auth/reauthenticate",
+        "/api/v1/auth/change-password",
+    ] {
+        assert!(
+            doc["paths"][path]["post"]["parameters"].is_null(),
+            "{path} must not require the CSRF header"
+        );
+    }
+}
+
+#[test]
+fn logout_documents_the_csrf_refusal() {
+    let doc = document();
+    let logout = &doc["paths"]["/api/v1/auth/logout"]["post"];
+
+    assert_eq!(
+        logout["responses"]["403"]["content"]["application/problem+json"]["schema"]["$ref"],
+        "#/components/schemas/ProblemDetails",
+        "logout must document the 403 csrf_failed outcome"
+    );
+}
+
+#[test]
 fn problem_details_and_the_closed_error_catalog_are_in_the_schema() {
     let doc = document();
     let schemas = &doc["components"]["schemas"];

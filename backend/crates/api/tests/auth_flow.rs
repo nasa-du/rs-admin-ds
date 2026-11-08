@@ -746,15 +746,32 @@ async fn request_validation_follows_the_problem_contract(pool: PgPool) {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(problem_code(&json(&body)), "validation_failed");
 
+    // A cookie endpoint refuses a non-JSON content type at the CSRF boundary
+    // before body parsing (spec §7.11).
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/auth/login")
         .header(header::CONTENT_TYPE, "text/plain")
+        .header(header::ORIGIN, auth_support::TEST_ORIGIN)
+        .header(auth_support::CSRF_HEADER, auth_support::CSRF_VALUE)
         .body(Body::from(r#"{"identifier":"alice","password":"x"}"#))
         .expect("request");
+    let (status, _headers, body) = send(app.clone(), request).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem_code(&json(&body)), "csrf_failed");
+
+    // Malformed JSON below that boundary keeps the `invalid_json` contract.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, auth_support::TEST_ORIGIN)
+        .header(auth_support::CSRF_HEADER, auth_support::CSRF_VALUE)
+        .body(Body::from("{not json"))
+        .expect("request");
     let (status, _headers, body) = send(app, request).await;
-    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    assert_eq!(problem_code(&json(&body)), "unsupported_media_type");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(problem_code(&json(&body)), "invalid_json");
 }
 
 #[sqlx::test(migrations = "../../migrations")]

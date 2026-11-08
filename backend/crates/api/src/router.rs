@@ -1,6 +1,7 @@
 //! Router assembly, health endpoints and the common middleware stack.
 
 use crate::auth::{AUTH_JSON_BODY_BYTES, AuthServices};
+use crate::browser::BrowserSecurity;
 use crate::error::ApiError;
 use crate::middleware;
 use axum::Json;
@@ -41,6 +42,7 @@ pub const READINESS_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct AppState {
     pub database: Database,
     auth: Option<Arc<AuthServices>>,
+    browser: BrowserSecurity,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
         Self {
             database,
             auth: None,
+            browser: BrowserSecurity::default(),
         }
     }
 
@@ -55,11 +58,23 @@ impl AppState {
         Self {
             database,
             auth: Some(Arc::new(auth)),
+            browser: BrowserSecurity::default(),
         }
+    }
+
+    /// Install the canonicalized CORS allowlist (spec §7.11). Without it every
+    /// browser request is refused because no origin is trusted.
+    pub fn with_allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.browser = BrowserSecurity::new(origins);
+        self
     }
 
     pub(crate) fn auth(&self) -> Option<&AuthServices> {
         self.auth.as_deref()
+    }
+
+    pub(crate) fn browser(&self) -> &BrowserSecurity {
+        &self.browser
     }
 }
 
@@ -104,12 +119,20 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
 
 /// Build the production router.
 pub fn build_router(state: AppState) -> Router {
+    let browser = state.browser().clone();
     let router: Router<AppState> = openapi_router().into();
-    with_common_middleware(router.fallback(not_found).with_state(state))
+    with_common_middleware_for(
+        router.fallback(not_found).with_state(state),
+        REQUEST_TIMEOUT,
+        browser,
+    )
 }
 
 /// Apply the common middleware stack. Exposed so integration tests can wrap
 /// additional routes and exercise the same contract.
+///
+/// These helpers install an empty CORS allowlist, so they grant no browser
+/// origin. [`build_router`] installs the policy configured on [`AppState`].
 pub fn with_common_middleware(router: Router) -> Router {
     with_common_middleware_and_timeout(router, REQUEST_TIMEOUT)
 }
@@ -117,6 +140,14 @@ pub fn with_common_middleware(router: Router) -> Router {
 /// Same stack with an explicit request timeout. Exposed for timeout tests.
 #[doc(hidden)]
 pub fn with_common_middleware_and_timeout(router: Router, timeout: Duration) -> Router {
+    with_common_middleware_for(router, timeout, BrowserSecurity::default())
+}
+
+fn with_common_middleware_for(
+    router: Router,
+    timeout: Duration,
+    browser: BrowserSecurity,
+) -> Router {
     router.layer(
         ServiceBuilder::new()
             .layer(from_fn(middleware::observe))
@@ -125,6 +156,7 @@ pub fn with_common_middleware_and_timeout(router: Router, timeout: Duration) -> 
             .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
             .layer(ConcurrencyLimitLayer::new(MAX_IN_FLIGHT_REQUESTS))
             .layer(from_fn(middleware::request_id))
+            .layer(from_fn_with_state(browser, crate::browser::cors))
             .layer(from_fn_with_state(timeout, middleware::request_timeout)),
     )
 }

@@ -65,7 +65,10 @@ async fn run() -> Result<()> {
     let metrics_handle = install_metrics_recorder()?;
     let upkeep = spawn_metrics_upkeep(metrics_handle.clone());
 
-    let app = build_router(AppState::with_auth(database.clone(), auth));
+    let app = build_router(
+        AppState::with_auth(database.clone(), auth)
+            .with_allowed_origins(config.origins.cors_allowed_origins.clone()),
+    );
     let api_listener = TcpListener::bind(config.server.api_addr).await?;
     let metrics_listener = TcpListener::bind(config.server.metrics_addr).await?;
 

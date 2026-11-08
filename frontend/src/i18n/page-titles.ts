@@ -7,6 +7,10 @@
 export const PAGE_TITLE_KEYS = {
   dashboard: 'nav:dashboard',
   users: 'users:title',
+  roles: 'roles:title',
+  roleNew: 'roles:new.title',
+  roleDetail: 'roles:detail.title',
+  auditLogs: 'audit:title',
   settings: 'settings:title',
   settingsProfile: 'settings:nav.profile',
   settingsAccount: 'settings:nav.account',

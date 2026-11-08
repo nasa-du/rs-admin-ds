@@ -1,6 +1,8 @@
+import { authWrapper, makeUser } from '@/test-utils/auth'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, type RenderResult } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import type { UserSelfResponse } from '@/api/generated/model'
 import { SearchProvider } from '@/context/search-provider'
 
 const COMMAND_MENU_PLACEHOLDER = 'Type a command or search...'
@@ -24,8 +26,12 @@ vi.mock('@/context/theme-provider', () => ({
 
 type ShortcutModifier = 'Control' | 'Meta'
 
-async function renderWithSearchProvider() {
-  return await render(<SearchProvider>{null}</SearchProvider>)
+async function renderWithSearchProvider(
+  user: UserSelfResponse = makeUser({ is_super_admin: true })
+) {
+  return await render(<SearchProvider>{null}</SearchProvider>, {
+    wrapper: authWrapper(user),
+  })
 }
 
 /**
@@ -73,7 +79,9 @@ describe('SearchProvider and CommandMenu', () => {
     await expect.element(getByText('Light')).toBeInTheDocument()
     await expect.element(getByText('Dark')).toBeInTheDocument()
     await expect.element(getByText('System')).toBeInTheDocument()
-    await expect.element(getByText('Dashboard')).toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('option', { name: 'Dashboard' }))
+      .toBeInTheDocument()
   })
 
   it('does not show the dialog content when search is closed', async () => {
@@ -141,6 +149,25 @@ describe('SearchProvider and CommandMenu', () => {
     expect(mocks.setTheme).toHaveBeenCalledWith('dark')
     await expect
       .element(screen.getByPlaceholder(COMMAND_MENU_PLACEHOLDER))
+      .not.toBeInTheDocument()
+  })
+
+  it('hides nav items the current user cannot access', async () => {
+    const screen = await renderWithSearchProvider(makeUser())
+
+    await openCommandPalette(screen)
+
+    await expect
+      .element(screen.getByRole('option', { name: 'Dashboard' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('option', { name: 'Users' }))
+      .not.toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('option', { name: 'Roles' }))
+      .not.toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('option', { name: 'Audit logs' }))
       .not.toBeInTheDocument()
   })
 

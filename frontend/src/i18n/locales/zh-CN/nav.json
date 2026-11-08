@@ -1,10 +1,13 @@
 {
   "groups": {
+    "dashboard": "仪表盘",
     "management": "管理",
     "settings": "设置"
   },
   "dashboard": "仪表盘",
   "users": "用户",
+  "roles": "角色",
+  "auditLogs": "审计日志",
   "settings": "设置",
   "profile": "个人资料",
   "account": "账户",

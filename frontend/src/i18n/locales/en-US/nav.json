@@ -1,10 +1,13 @@
 {
   "groups": {
+    "dashboard": "Dashboard",
     "management": "Management",
     "settings": "Settings"
   },
   "dashboard": "Dashboard",
   "users": "Users",
+  "roles": "Roles",
+  "auditLogs": "Audit logs",
   "settings": "Settings",
   "profile": "Profile",
   "account": "Account",

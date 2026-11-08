@@ -68,6 +68,50 @@ describe('decideProtectedRoute', () => {
     ).toEqual({ kind: 'forbidden', from: '/roles' })
   })
 
+  it('lets roles.create open only the create route', () => {
+    const roleCreator: GuardUser = {
+      must_change_password: false,
+      is_super_admin: false,
+      permissions: ['roles.create'],
+    }
+
+    expect(
+      decideProtectedRoute({
+        user: roleCreator,
+        authStatus: 'authenticated',
+        pathname: '/roles/new',
+        href: '/roles/new',
+      })
+    ).toEqual({ kind: 'allow' })
+    expect(
+      decideProtectedRoute({
+        user: roleCreator,
+        authStatus: 'authenticated',
+        pathname: '/roles',
+        href: '/roles',
+      })
+    ).toEqual({ kind: 'forbidden', from: '/roles' })
+  })
+
+  it('requires audit.read for the audit log route', () => {
+    expect(
+      decideProtectedRoute({
+        user: USER,
+        authStatus: 'authenticated',
+        pathname: '/audit-logs',
+        href: '/audit-logs',
+      })
+    ).toEqual({ kind: 'forbidden', from: '/audit-logs' })
+    expect(
+      decideProtectedRoute({
+        user: { ...USER, permissions: ['audit.read'] },
+        authStatus: 'authenticated',
+        pathname: '/audit-logs',
+        href: '/audit-logs',
+      })
+    ).toEqual({ kind: 'allow' })
+  })
+
   it('allows a super admin through every route permission check', () => {
     expect(
       decideProtectedRoute({

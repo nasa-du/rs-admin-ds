@@ -1,6 +1,14 @@
 {
   "title": "角色",
   "description": "管理角色与权限。",
+  "new": {
+    "title": "新建角色",
+    "description": "创建自定义角色并选择其权限。"
+  },
+  "detail": {
+    "title": "角色详情",
+    "description": "查看该角色的权限与成员。"
+  },
   "empty": {
     "title": "角色管理尚未接入",
     "description": "角色列表、新建与权限矩阵将在后续版本接入。"

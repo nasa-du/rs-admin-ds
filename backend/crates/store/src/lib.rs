@@ -8,6 +8,7 @@ pub mod audit;
 pub mod auth;
 pub mod identity;
 pub mod rbac;
+pub mod roles;
 
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};

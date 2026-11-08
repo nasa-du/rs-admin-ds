@@ -5,7 +5,7 @@
 
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{
-    BASELINE_ROLE, BuiltInRole, EffectivePermissions, RoleGrant, with_baseline_role,
+    BASELINE_ROLE, BuiltInRole, EffectivePermissions, RoleGrant, RoleTarget, with_baseline_role,
 };
 use std::collections::BTreeSet;
 
@@ -156,4 +156,47 @@ fn grant_subset_rule_applies_to_non_super_admins() {
     let super_admin =
         EffectivePermissions::from_grants([RoleGrant::BuiltIn(BuiltInRole::SuperAdmin)]);
     assert!(super_admin.can_grant(&keys(&["roles.create", "roles.delete"])));
+}
+
+#[test]
+fn assignable_and_manageable_follow_the_target_eligibility_rules() {
+    let admin = EffectivePermissions::from_grants([RoleGrant::BuiltIn(BuiltInRole::Admin)]);
+    let super_admin =
+        EffectivePermissions::from_grants([RoleGrant::BuiltIn(BuiltInRole::SuperAdmin)]);
+    let narrow =
+        EffectivePermissions::from_grants([RoleGrant::Custom(&[PermissionKey::UsersRead])]);
+
+    // Spec §6.4: the baseline role is assignable to everyone; the privileged
+    // built-ins are assignable only to super admins; built-ins are never
+    // manageable.
+    for effective in [&admin, &super_admin, &narrow] {
+        assert!(effective.can_assign(RoleTarget::BuiltIn(BuiltInRole::User)));
+        assert!(!effective.can_manage(RoleTarget::BuiltIn(BuiltInRole::User)));
+        assert!(!effective.can_manage(RoleTarget::BuiltIn(BuiltInRole::Admin)));
+        assert!(!effective.can_manage(RoleTarget::BuiltIn(BuiltInRole::SuperAdmin)));
+    }
+    assert!(!admin.can_assign(RoleTarget::BuiltIn(BuiltInRole::Admin)));
+    assert!(!admin.can_assign(RoleTarget::BuiltIn(BuiltInRole::SuperAdmin)));
+    assert!(!narrow.can_assign(RoleTarget::BuiltIn(BuiltInRole::Admin)));
+    assert!(super_admin.can_assign(RoleTarget::BuiltIn(BuiltInRole::Admin)));
+    assert!(super_admin.can_assign(RoleTarget::BuiltIn(BuiltInRole::SuperAdmin)));
+
+    // Custom roles: eligible exactly when their permission set is a subset of
+    // the operator's effective permissions; super admins are exempt.
+    let within_admin = [PermissionKey::UsersRead, PermissionKey::AuditRead];
+    let beyond_admin = [PermissionKey::RolesCreate];
+    assert!(admin.can_assign(RoleTarget::Custom(&within_admin)));
+    assert!(admin.can_manage(RoleTarget::Custom(&within_admin)));
+    assert!(!admin.can_assign(RoleTarget::Custom(&beyond_admin)));
+    assert!(!admin.can_manage(RoleTarget::Custom(&beyond_admin)));
+
+    assert!(super_admin.can_assign(RoleTarget::Custom(&beyond_admin)));
+    assert!(super_admin.can_manage(RoleTarget::Custom(&beyond_admin)));
+
+    let within_narrow = [PermissionKey::UsersRead];
+    let beyond_narrow = [PermissionKey::UsersRead, PermissionKey::UsersCreate];
+    assert!(narrow.can_assign(RoleTarget::Custom(&within_narrow)));
+    assert!(narrow.can_manage(RoleTarget::Custom(&within_narrow)));
+    assert!(!narrow.can_assign(RoleTarget::Custom(&beyond_narrow)));
+    assert!(!narrow.can_manage(RoleTarget::Custom(&beyond_narrow)));
 }

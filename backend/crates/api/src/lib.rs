@@ -13,6 +13,7 @@ mod logging;
 mod metrics;
 mod middleware;
 mod openapi;
+mod roles;
 mod router;
 
 pub use auth::{AuthServiceError, AuthServices};

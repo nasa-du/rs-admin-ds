@@ -7,6 +7,7 @@
  */
 import type { ErrorCode } from './errorCode'
 import type { FieldError } from './fieldError'
+import type { ProblemDetailsDetails } from './problemDetailsDetails'
 
 /**
  * RFC 7807 problem document used for every API error.
@@ -15,6 +16,11 @@ export interface ProblemDetails {
   /** Stable error code from the closed catalog. */
   code: ErrorCode
   detail: string
+  /**
+   * Optional structured context for machine handling. Reauthentication refusals add
+   * `{"max_age": <seconds>}` (spec §5.8); other errors usually omit it.
+   */
+  details?: ProblemDetailsDetails
   /** @nullable */
   errors?: FieldError[] | null
   instance: string

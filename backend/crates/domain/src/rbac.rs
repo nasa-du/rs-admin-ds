@@ -78,6 +78,17 @@ pub enum RoleGrant<'a> {
     Custom(&'a [PermissionKey]),
 }
 
+/// A role considered as the target of a grant or management action
+/// (spec §6.4). Unlike [`RoleGrant`] this describes the target, not the
+/// operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleTarget<'a> {
+    /// A code-defined role.
+    BuiltIn(BuiltInRole),
+    /// A custom role and its permission keys.
+    Custom(&'a [PermissionKey]),
+}
+
 /// The union of a principal's role permissions, plus the super-admin bypass.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EffectivePermissions {
@@ -129,7 +140,37 @@ impl EffectivePermissions {
     /// Grant-subset rule: non-super-admins may only grant permissions they
     /// hold themselves. Super administrators are exempt.
     pub fn can_grant(&self, target: &BTreeSet<PermissionKey>) -> bool {
-        self.is_super_admin || target.is_subset(&self.permission_keys)
+        self.can_grant_keys(target.iter().copied())
+    }
+
+    /// Grant-subset rule for an unordered key list, such as a role loaded from
+    /// the database.
+    pub fn can_grant_keys(&self, target: impl IntoIterator<Item = PermissionKey>) -> bool {
+        self.is_super_admin
+            || target
+                .into_iter()
+                .all(|key| self.permission_keys.contains(&key))
+    }
+
+    /// `assignable` target eligibility (spec §6.4): whether the operator may
+    /// hand this role to a user. This flag deliberately ignores whether the
+    /// operator holds `users.assign_role`; clients intersect the two.
+    pub fn can_assign(&self, target: RoleTarget<'_>) -> bool {
+        match target {
+            RoleTarget::BuiltIn(BuiltInRole::User) => true,
+            RoleTarget::BuiltIn(_) => self.is_super_admin,
+            RoleTarget::Custom(keys) => self.can_grant_keys(keys.iter().copied()),
+        }
+    }
+
+    /// `manageable` target eligibility (spec §6.4): built-in roles are never
+    /// manageable; custom roles are manageable when their permission set is a
+    /// subset of the operator's. Holding `roles.update` is checked separately.
+    pub fn can_manage(&self, target: RoleTarget<'_>) -> bool {
+        match target {
+            RoleTarget::BuiltIn(_) => false,
+            RoleTarget::Custom(keys) => self.can_grant_keys(keys.iter().copied()),
+        }
     }
 }
 

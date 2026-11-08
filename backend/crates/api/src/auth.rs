@@ -157,6 +157,17 @@ impl AuthServices {
     ) -> ClientIpResolution {
         self.trusted_proxies.resolve(peer, forwarded_for)
     }
+
+    /// The tamper-evident audit writer shared by every endpoint.
+    pub(crate) fn audit(&self) -> &AuditWriter {
+        &self.audit
+    }
+
+    /// Maximum age of the last password authentication for sensitive actions
+    /// (spec §5.8).
+    pub(crate) fn reauth_max_age(&self) -> std::time::Duration {
+        self.settings.reauth_max_age
+    }
 }
 
 /// Startup errors from the authentication services. Messages never contain key
@@ -2383,7 +2394,7 @@ async fn record_refused_login(
     transaction.commit().await.map_err(dependency_unavailable)
 }
 
-async fn write_audit_event(
+pub(crate) async fn write_audit_event(
     transaction: &mut Transaction<'_, Postgres>,
     services: &AuthServices,
     builder: AuditEventBuilder,
@@ -2506,14 +2517,17 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     (!token.is_empty()).then_some(token)
 }
 
-fn user_agent(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn user_agent(headers: &HeaderMap) -> Option<String> {
     headers
         .get(USER_AGENT)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
 }
 
-fn with_user_agent(builder: AuditEventBuilder, user_agent: Option<String>) -> AuditEventBuilder {
+pub(crate) fn with_user_agent(
+    builder: AuditEventBuilder,
+    user_agent: Option<String>,
+) -> AuditEventBuilder {
     match user_agent {
         Some(user_agent) => builder.user_agent(user_agent),
         None => builder,
@@ -2552,7 +2566,7 @@ fn refresh_token_from_cookie(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn dependency_unavailable(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn dependency_unavailable(error: impl std::fmt::Display) -> ApiError {
     tracing::warn!(error = %error, "authentication dependency failed");
     ApiError::service_unavailable()
 }
@@ -2571,12 +2585,12 @@ fn password_unavailable(error: PasswordError) -> ApiError {
     }
 }
 
-fn audit_unavailable(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn audit_unavailable(error: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %error, "audit write failed; failing closed");
     ApiError::service_unavailable()
 }
 
-fn audit_event_invalid(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn audit_event_invalid(error: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %error, "audit event is invalid");
     ApiError::new(ErrorCode::InternalError)
 }

@@ -1,6 +1,14 @@
 {
   "title": "Roles",
   "description": "Manage roles and permissions.",
+  "new": {
+    "title": "Create role",
+    "description": "Create a custom role and choose its permissions."
+  },
+  "detail": {
+    "title": "Role details",
+    "description": "Review this role's permissions and members."
+  },
   "empty": {
     "title": "Role management is not connected yet",
     "description": "The role list, creation, and permission matrix will be connected in a later release."

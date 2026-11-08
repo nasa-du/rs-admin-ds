@@ -50,7 +50,8 @@
   },
   "welcome": {
     "title": "Welcome to rs-admin",
-    "description": "Sign in to use the admin console. Dashboard data will be connected in a later release."
+    "description": "Sign in to use the admin console. Dashboard data will be connected in a later release.",
+    "quickLinks": "Quick links"
   },
   "language": {
     "label": "Language",

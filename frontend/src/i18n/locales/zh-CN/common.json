@@ -50,7 +50,8 @@
   },
   "welcome": {
     "title": "欢迎使用 rs-admin",
-    "description": "登录后即可进入管理后台。仪表盘业务数据将在后续版本接入。"
+    "description": "登录后即可进入管理后台。仪表盘业务数据将在后续版本接入。",
+    "quickLinks": "快捷入口"
   },
   "language": {
     "label": "语言",

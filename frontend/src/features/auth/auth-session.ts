@@ -28,6 +28,8 @@ export type AuthSession = {
   bootstrap: () => Promise<UserSelfResponse | null>
   /** 401 single-flight: share one refresh between concurrent callers. */
   refreshAccessToken: () => Promise<string>
+  /** Re-read `GET /auth/me` into the query cache (change-password success). */
+  refreshMe: () => Promise<UserSelfResponse>
   /** Business 403 `account_disabled`: clear the session and prompt once. */
   handleAccountDisabled: (error: unknown) => void
   /** Login success: clear old data, then store token and user. */
@@ -36,9 +38,15 @@ export type AuthSession = {
   applyAccessToken: (accessToken: string) => void
   /** Logout: clear local state regardless of the server result. */
   signOut: () => void
+  /**
+   * Observe definitive session endings (expiry or disabled account) so the
+   * shell can navigate to sign-in. Returns an unsubscribe function.
+   */
+  onSessionInvalid: (listener: SessionInvalidListener) => () => void
 }
 
 type DefinitiveFailure = 'unauthenticated' | 'account_disabled'
+export type SessionInvalidListener = (kind: DefinitiveFailure) => void
 
 const SESSION_EXPIRED_ERROR = new ApiError({
   code: 'session_expired',
@@ -55,6 +63,7 @@ function classifyFailure(error: unknown): DefinitiveFailure | 'transient' {
 export function createAuthSession(deps: AuthSessionDeps): AuthSession {
   let refreshPromise: Promise<string> | null = null
   let bootstrapPromise: Promise<UserSelfResponse | null> | null = null
+  const sessionInvalidListeners = new Set<SessionInvalidListener>()
 
   function clearSession() {
     authStore.getState().clearSession()
@@ -76,6 +85,10 @@ export function createAuthSession(deps: AuthSessionDeps): AuthSession {
     const hadSession = accessToken !== null
 
     clearSession()
+
+    if (!alreadySignedOut) {
+      for (const listener of sessionInvalidListeners) listener(kind)
+    }
 
     if (!options.notify) return
 
@@ -170,6 +183,22 @@ export function createAuthSession(deps: AuthSessionDeps): AuthSession {
     invalidate('account_disabled', apiError, { notify: true })
   }
 
+  function refreshMe(): Promise<UserSelfResponse> {
+    return Promise.resolve()
+      .then(() => deps.fetchMe())
+      .then((user) => {
+        deps.queryClient.setQueryData(authKeys.me, user)
+        return user
+      })
+  }
+
+  function onSessionInvalid(listener: SessionInvalidListener) {
+    sessionInvalidListeners.add(listener)
+    return () => {
+      sessionInvalidListeners.delete(listener)
+    }
+  }
+
   function applyLogin(response: Pick<LoginResponse, 'access_token' | 'user'>) {
     deps.queryClient.clear()
     authStore.getState().authenticate(response.access_token)
@@ -187,10 +216,12 @@ export function createAuthSession(deps: AuthSessionDeps): AuthSession {
   return {
     bootstrap,
     refreshAccessToken,
+    refreshMe,
     handleAccountDisabled,
     applyLogin,
     applyAccessToken,
     signOut,
+    onSessionInvalid,
   }
 }
 

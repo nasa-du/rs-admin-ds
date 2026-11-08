@@ -1,10 +1,8 @@
+import { Outlet } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
-type AuthLayoutProps = {
-  children: React.ReactNode
-}
-
-export function AuthLayout({ children }: AuthLayoutProps) {
+/** Centered card layout shared by sign-in and change-password. */
+export function AuthLayout() {
   const { t } = useTranslation()
 
   return (
@@ -13,7 +11,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
         <div className='mb-4 flex items-center justify-center'>
           <h1 className='text-xl font-medium'>{t('appName')}</h1>
         </div>
-        {children}
+        <Outlet />
       </div>
     </div>
   )

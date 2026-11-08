@@ -19,6 +19,10 @@
     "maintenance": {
       "title": "Website is under maintenance",
       "description": "The site is not available at the moment. We'll be back online shortly."
+    },
+    "session": {
+      "title": "Can't restore your session",
+      "description": "The server could not be reached. Check your connection and try again."
     }
   },
   "actions": {

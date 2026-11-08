@@ -4,44 +4,63 @@ import { userEvent } from 'vitest/browser'
 import { SignOutDialog } from './sign-out-dialog'
 
 const navigate = vi.fn()
-
-const MOCK_HREF = '/settings?tab=1'
+const signOutOfApp = vi.fn(async () => ({ ok: true }))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return {
-    ...actual,
-    useNavigate: () => navigate,
-    useLocation: () => ({ href: MOCK_HREF }),
-  }
+  return { ...actual, useNavigate: () => navigate }
 })
+
+vi.mock('@/features/auth/sign-out', () => ({
+  signOutOfApp: () => signOutOfApp(),
+}))
 
 describe('SignOutDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    signOutOfApp.mockResolvedValue({ ok: true })
   })
 
-  it('navigates to sign-in with the current location as redirect', async () => {
+  it('signs out and returns to the sign-in page', async () => {
     const { getByRole } = await render(
       <SignOutDialog open onOpenChange={vi.fn()} />
     )
 
     await userEvent.click(getByRole('button', { name: /^Sign out$/i }))
 
-    expect(navigate).toHaveBeenCalledWith({
-      to: '/sign-in',
-      search: { redirect: MOCK_HREF },
-      replace: true,
-    })
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        to: '/sign-in',
+        replace: true,
+      })
+    )
+    expect(signOutOfApp).toHaveBeenCalledTimes(1)
   })
 
-  it('does not navigate when Cancel is clicked', async () => {
+  it('still leaves the page when local sign-out throws', async () => {
+    signOutOfApp.mockRejectedValueOnce(new Error('unexpected'))
+    const { getByRole } = await render(
+      <SignOutDialog open onOpenChange={vi.fn()} />
+    )
+
+    await userEvent.click(getByRole('button', { name: /^Sign out$/i }))
+
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        to: '/sign-in',
+        replace: true,
+      })
+    )
+  })
+
+  it('does not sign out or navigate when Cancel is clicked', async () => {
     const { getByRole } = await render(
       <SignOutDialog open onOpenChange={vi.fn()} />
     )
 
     await userEvent.click(getByRole('button', { name: /^Cancel$/i }))
 
+    expect(signOutOfApp).not.toHaveBeenCalled()
     expect(navigate).not.toHaveBeenCalled()
   })
 })

@@ -14,6 +14,7 @@
   "selectLanguage": "请选择语言。",
   "selectNotificationType": "请选择通知类型。",
   "selectAtLeastOneItem": "请至少选择一项。",
+  "passwordMismatch": "两次输入的密码不一致。",
   "password": {
     "too_short": "密码长度不足。",
     "too_long": "密码过长。",

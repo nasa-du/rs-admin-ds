@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api-error'
 import { handleServerError } from '@/lib/handle-server-error'
 import { queryClient } from '@/lib/query-client'
+import { onPasswordChangeRequired } from '@/features/auth/auth-interruptions'
 import { authStore } from '@/features/auth/auth-store'
 import { authHttp } from './auth-http'
 import { apiClient, customInstance } from './mutator'
@@ -349,6 +350,30 @@ describe('request headers', () => {
     // A mutation's onError must not repeat the prompt.
     handleServerError(error)
     expect(toastError).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a business 403 password_change_required and keeps the session', async () => {
+    authStore.getState().authenticate('restricted-token')
+    useAdapter(async (config) => {
+      throw problemResponse(config, 403, {
+        code: 'password_change_required',
+        status: 403,
+      })
+    })
+    const listener = vi.fn()
+    const unsubscribe = onPasswordChangeRequired(listener)
+
+    const error = await customInstance({
+      url: '/api/v1/users',
+      method: 'GET',
+    }).catch((caught: unknown) => caught)
+    unsubscribe()
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).code).toBe('password_change_required')
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(authStore.getState().authStatus).toBe('authenticated')
+    expect(authStore.getState().accessToken).toBe('restricted-token')
   })
 
   it('keeps the session when the refresh fails transiently', async () => {

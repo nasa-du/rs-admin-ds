@@ -11,6 +11,16 @@
   "pickDate": "Pick a date",
   "selectPlaceholder": "Select",
   "close": "Close",
+  "requestId": {
+    "label": "Request ID",
+    "copy": "Copy request ID",
+    "copied": "Copied"
+  },
+  "error": {
+    "retry": "Retry",
+    "retryIn": "Try again in {{seconds}}s.",
+    "technicalCode": "Error code: {{code}}"
+  },
   "sidebar": {
     "mobileTitle": "Sidebar",
     "mobileDescription": "Displays the mobile sidebar."
@@ -76,10 +86,5 @@
     "actionsFor_other": "Bulk actions for {{count}} selected {{entity}}s",
     "announcement_one": "{{count}} {{entity}} selected. Bulk actions toolbar is available.",
     "announcement_other": "{{count}} {{entity}}s selected. Bulk actions toolbar is available."
-  },
-  "backendStatus": {
-    "checking": "Checking backend connection...",
-    "ready": "Backend is ready.",
-    "unreachable": "Backend is unavailable."
   }
 }

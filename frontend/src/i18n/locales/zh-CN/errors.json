@@ -19,6 +19,10 @@
     "maintenance": {
       "title": "站点维护中",
       "description": "站点暂时不可用，我们很快会恢复。"
+    },
+    "session": {
+      "title": "无法恢复会话",
+      "description": "暂时无法连接服务器，请检查网络后重试。"
     }
   },
   "actions": {

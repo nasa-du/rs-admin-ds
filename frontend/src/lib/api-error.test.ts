@@ -39,6 +39,60 @@ describe('api-error', () => {
     expect(toApiError(undefined)).toBeNull()
   })
 
+  it('falls back to a status-code error for non-ProblemDetails responses', () => {
+    const error = toApiError({
+      response: {
+        status: 502,
+        statusText: 'Bad Gateway',
+        data: '<html>bad gateway</html>',
+        headers: { 'x-request-id': 'req-gateway' },
+      },
+    })
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error?.status).toBe(502)
+    expect(error?.code).toBe('service_unavailable')
+    expect(error?.requestId).toBe('req-gateway')
+  })
+
+  it('maps common fallback statuses to stable error codes', () => {
+    const codeFor = (status: number) =>
+      toApiError({ response: { status, data: 'not problem details' } })?.code
+
+    expect(codeFor(401)).toBe('access_token_invalid')
+    expect(codeFor(403)).toBe('forbidden')
+    expect(codeFor(404)).toBe('not_found')
+    expect(codeFor(429)).toBe('rate_limited')
+    expect(codeFor(500)).toBe('internal_error')
+    expect(codeFor(503)).toBe('service_unavailable')
+  })
+
+  it('keeps Retry-After on a non-ProblemDetails 429', () => {
+    const error = toApiError({
+      response: {
+        status: 429,
+        data: 'slow down',
+        headers: { 'Retry-After': '30' },
+      },
+    })
+
+    expect(error?.code).toBe('rate_limited')
+    expect(error?.retryAfterSeconds).toBe(30)
+  })
+
+  it('prefers ProblemDetails over the status fallback', () => {
+    const error = toApiError({
+      response: {
+        status: 500,
+        data: { code: 'internal_error', status: 500, detail: 'db down' },
+        headers: {},
+      },
+    })
+
+    expect(error?.code).toBe('internal_error')
+    expect(error?.problem.detail).toBe('db down')
+  })
+
   it('clamps Retry-After to a non-negative integer', () => {
     expect(
       getRetryAfterSeconds({ response: { headers: { 'retry-after': '-5' } } })

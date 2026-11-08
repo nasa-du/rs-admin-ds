@@ -21,6 +21,9 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  optimizeDeps: {
+    include: ['zustand'],
+  },
   server: {
     // Keep local development same-origin: the API client uses relative paths
     // and the backend listens on 8080.

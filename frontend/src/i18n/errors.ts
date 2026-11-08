@@ -7,6 +7,7 @@ import { type FieldError, toApiError } from '@/lib/api-error'
  * fall back to `errors:common.unexpected`.
  */
 export const ERROR_KEY_MAP = {
+  network_error: 'errors:common.network_error',
   invalid_json: 'errors:common.invalid_json',
   unknown_field: 'errors:common.unknown_field',
   unsupported_media_type: 'errors:common.unsupported_media_type',

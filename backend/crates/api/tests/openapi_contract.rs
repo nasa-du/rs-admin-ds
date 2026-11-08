@@ -564,3 +564,171 @@ fn roles_and_permissions_operations_are_documented_with_stable_ids() {
         );
     }
 }
+
+#[test]
+fn audit_log_operations_are_documented_with_stable_ids_and_catalog_schemas() {
+    let doc = document();
+
+    let list = &doc["paths"]["/api/v1/audit-logs"]["get"];
+    assert_eq!(list["operationId"], "listAuditLogs");
+    assert_eq!(list["tags"][0], "Audit Logs");
+    assert_eq!(
+        list["security"][0]["bearerAuth"],
+        serde_json::json!([]),
+        "listAuditLogs must require bearerAuth"
+    );
+    assert_eq!(
+        list["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AuditLogListResponse"
+    );
+
+    let parameters = list["parameters"].as_array().expect("query parameters");
+    for name in [
+        "actor_id",
+        "action",
+        "target_type",
+        "target_id",
+        "result",
+        "severity",
+        "request_id",
+        "ip",
+        "from",
+        "to",
+        "page",
+        "page_size",
+        "sort",
+    ] {
+        assert!(
+            parameters
+                .iter()
+                .any(|parameter| parameter["name"] == name && parameter["in"] == "query"),
+            "listAuditLogs must document the {name} query parameter"
+        );
+    }
+
+    let detail = &doc["paths"]["/api/v1/audit-logs/{id}"]["get"];
+    assert_eq!(detail["operationId"], "getAuditLog");
+    assert_eq!(detail["tags"][0], "Audit Logs");
+    assert_eq!(
+        detail["security"][0]["bearerAuth"],
+        serde_json::json!([]),
+        "getAuditLog must require bearerAuth"
+    );
+    assert_eq!(
+        detail["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/AuditLogDetail"
+    );
+    for status in ["401", "403", "404", "503"] {
+        assert_eq!(
+            detail["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "getAuditLog must document {status} as a problem"
+        );
+    }
+
+    let schemas = &doc["components"]["schemas"];
+    // `action` and `target_type` stay open strings with a documented catalog so
+    // future values remain readable by older clients; `result` and `severity`
+    // are closed enums (spec §7.9).
+    assert_eq!(
+        schemas["AuditLogSummary"]["properties"]["action"]["$ref"],
+        "#/components/schemas/AuditAction"
+    );
+    assert_eq!(
+        schemas["AuditTargetRef"]["properties"]["type"]["$ref"],
+        "#/components/schemas/AuditTargetType"
+    );
+    assert_eq!(
+        schemas["AuditAction"]["type"], "string",
+        "action stays an open string"
+    );
+    assert!(
+        schemas["AuditAction"].get("enum").is_none(),
+        "action must not become a closed enum"
+    );
+    let action_description = schemas["AuditAction"]["description"]
+        .as_str()
+        .expect("AuditAction description");
+    for action in [
+        "authn_login_success",
+        "user_roles_changed",
+        "audit_log_accessed",
+    ] {
+        assert!(
+            action_description.contains(action),
+            "AuditAction must document the current catalog; missing {action}"
+        );
+    }
+    assert_eq!(
+        schemas["AuditTargetType"]["type"], "string",
+        "target.type stays an open string"
+    );
+    assert!(
+        schemas["AuditTargetType"].get("enum").is_none(),
+        "target.type must not become a closed enum"
+    );
+    let target_description = schemas["AuditTargetType"]["description"]
+        .as_str()
+        .expect("AuditTargetType description");
+    for target_type in ["user", "role", "session", "audit_log", "system"] {
+        assert!(
+            target_description.contains(target_type),
+            "AuditTargetType must document the current catalog; missing {target_type}"
+        );
+    }
+
+    let result_values: Vec<&str> = schemas["AuditResult"]["enum"]
+        .as_array()
+        .expect("AuditResult enum")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert_eq!(result_values, ["success", "failure", "denied"]);
+    let severity_values: Vec<&str> = schemas["AuditSeverity"]["enum"]
+        .as_array()
+        .expect("AuditSeverity enum")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    assert_eq!(severity_values, ["info", "warning", "error", "critical"]);
+    assert_eq!(
+        schemas["AuditLogSummary"]["properties"]["result"]["$ref"],
+        "#/components/schemas/AuditResult"
+    );
+    assert_eq!(
+        schemas["AuditLogSummary"]["properties"]["severity"]["$ref"],
+        "#/components/schemas/AuditSeverity"
+    );
+
+    // The same closed catalogs type the query parameters.
+    for (name, schema) in [("result", "AuditResult"), ("severity", "AuditSeverity")] {
+        let parameter = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name} parameter"));
+        assert_eq!(
+            parameter["schema"]["$ref"],
+            format!("#/components/schemas/{schema}"),
+            "query parameter {name} must use the closed catalog"
+        );
+    }
+
+    assert_eq!(
+        schemas["AuditLogSummary"]["properties"]["target"]["$ref"],
+        "#/components/schemas/AuditTargetRef"
+    );
+    assert_eq!(
+        schemas["AuditLogSummary"]["properties"]["actor"]["$ref"],
+        "#/components/schemas/AuditActorRef"
+    );
+    assert_eq!(
+        schemas["AuditLogDetail"]["properties"]["details"]["type"], "object",
+        "details is an open object"
+    );
+    assert!(
+        schemas["AuditLogDetail"]["properties"]["details"]
+            .get("additionalProperties")
+            .is_none_or(|value| value != &serde_json::json!(false)),
+        "details must allow arbitrary keys"
+    );
+}

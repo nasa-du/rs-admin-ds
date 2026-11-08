@@ -131,12 +131,17 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(crate::users_lifecycle::unlock_user))
         .routes(routes!(crate::users_lifecycle::revoke_user_sessions));
 
+    let audit_logs = OpenApiRouter::new()
+        .routes(routes!(crate::audit_logs::list_audit_logs))
+        .routes(routes!(crate::audit_logs::get_audit_log));
+
     OpenApiRouter::new()
         .routes(routes!(health_live))
         .routes(routes!(health_ready))
         .merge(auth)
         .merge(roles)
         .merge(users)
+        .merge(audit_logs)
 }
 
 /// Build the production router.

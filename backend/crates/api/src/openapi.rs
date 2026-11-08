@@ -4,6 +4,10 @@
 //! `backend/openapi.json`, CI diffs the result, and the frontend generates its
 //! TypeScript client from the committed file.
 
+use crate::audit_logs::{
+    AuditActionSchema, AuditActorRef, AuditLogDetail, AuditLogListResponse, AuditLogSummary,
+    AuditResultSchema, AuditSeveritySchema, AuditTargetRef, AuditTargetTypeSchema,
+};
 use crate::auth::{
     ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutRequest,
     ReauthenticateRequest, ReauthenticateResponse, RefreshRequest, RefreshResponse, RoleRef,
@@ -44,7 +48,11 @@ use utoipa::{Modify, OpenApi};
             description = "User listing, detail, creation, profile edits and lifecycle actions"
         ),
         (name = "Roles", description = "Role catalog and custom role management"),
-        (name = "Permissions", description = "The code-owned permission catalog")
+        (name = "Permissions", description = "The code-owned permission catalog"),
+        (
+            name = "Audit Logs",
+            description = "Read-only audit log queries; detail reads append audit_log_accessed"
+        )
     ),
     components(schemas(
         ProblemDetails,
@@ -81,6 +89,15 @@ use utoipa::{Modify, OpenApi};
         SetUserRolesRequest,
         SetUserStatusRequest,
         ResetUserPasswordRequest,
+        AuditActorRef,
+        AuditTargetRef,
+        AuditLogSummary,
+        AuditLogDetail,
+        AuditLogListResponse,
+        AuditActionSchema,
+        AuditTargetTypeSchema,
+        AuditResultSchema,
+        AuditSeveritySchema,
     )),
     modifiers(&SecurityAddon)
 )]

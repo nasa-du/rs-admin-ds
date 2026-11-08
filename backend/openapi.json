@@ -16,6 +16,360 @@
     }
   ],
   "paths": {
+    "/api/v1/audit-logs": {
+      "get": {
+        "tags": [
+          "Audit Logs"
+        ],
+        "operationId": "listAuditLogs",
+        "parameters": [
+          {
+            "name": "actor_id",
+            "in": "query",
+            "description": "Exact actor user id (UUID).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Exact audit action. Unknown future actions are tolerated and return no\nrows; the value is never validated against the server catalog.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditAction"
+            }
+          },
+          {
+            "name": "target_type",
+            "in": "query",
+            "description": "Exact target type. Unknown future values are tolerated and return no\nrows.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditTargetType"
+            }
+          },
+          {
+            "name": "target_id",
+            "in": "query",
+            "description": "Exact target id (UUID).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "description": "Closed audit result catalog.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditResult"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Closed audit severity catalog.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditSeverity"
+            }
+          },
+          {
+            "name": "request_id",
+            "in": "query",
+            "description": "Exact request id / trace id (UUID).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ip",
+            "in": "query",
+            "description": "Exact IP address; IPv4-mapped IPv6 input is normalized to IPv4. CIDR\nranges are not supported.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive start of the window, RFC3339 (for example\n`2026-11-08T00:00:00Z`). Defaults to `to - 30 days`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Exclusive end of the window, RFC3339. Defaults to the current database\ntime.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "One-based page number; defaults to 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "Page size; defaults to 20 and may not exceed 200.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`occurred_at` or `-occurred_at`; defaults to `-occurred_at`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit rows inside the absolute time window; not filtered by management scope",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access token or session invalid",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer challenge"
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing audit.read",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid filter, pagination, sort or time range",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Audit log store or clock unavailable",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/audit-logs/{id}": {
+      "get": {
+        "tags": [
+          "Audit Logs"
+        ],
+        "operationId": "getAuditLog",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Audit log id (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit log detail; each successful read appends audit_log_accessed",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditLogDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Access token or session invalid",
+            "headers": {
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer challenge"
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing audit.read",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Audit log does not exist or has been purged",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Audit log store or audit chain unavailable",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/v1/auth/change-password": {
       "post": {
         "tags": [
@@ -3237,6 +3591,207 @@
   },
   "components": {
     "schemas": {
+      "AuditAction": {
+        "type": "string",
+        "description": "Open audit action code. Current catalog: authn_login_success, authn_login_fail, authn_login_lock, authn_login_rate_limited, authn_logout, authn_logout_all, authn_refresh_reuse_detected, authn_session_evicted, authn_password_changed, authn_password_change_fail, authn_reauth_success, authn_reauth_fail, authz_step_up_denied, authz_denied, user_created, user_updated, user_status_changed, user_password_reset, user_unlocked, user_roles_changed, user_sessions_revoked, role_created, role_updated, role_permissions_changed, role_deleted, system_bootstrap_super_admin, system_recover_super_admin, crypto_key_rotated, system_audit_logs_purged, audit_log_accessed. Values are additive; an unknown future value is returned as stored."
+      },
+      "AuditActorRef": {
+        "type": "object",
+        "description": "The actor snapshot recorded on an event. `id` is null for CLI, system and\nanonymous actions; `label` is the username snapshot or a stable marker\n(`cli`, `system`, `anonymous`).",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "AuditLogDetail": {
+        "type": "object",
+        "description": "A single audit row; adds the free-form `details` object and the recorded\nuser agent. Forbidden secret keys are masked on read as defense in depth.",
+        "required": [
+          "id",
+          "occurred_at",
+          "actor",
+          "action",
+          "target",
+          "result",
+          "severity",
+          "request_id",
+          "details"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditActorRef"
+          },
+          "details": {
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occurred_at": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/AuditResult"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AuditSeverity"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AuditTargetRef"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditLogListResponse": {
+        "type": "object",
+        "description": "Offset-paginated audit log envelope.",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditLogSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AuditLogSummary": {
+        "type": "object",
+        "description": "An audit row as returned by the list endpoint.",
+        "required": [
+          "id",
+          "occurred_at",
+          "actor",
+          "action",
+          "target",
+          "result",
+          "severity",
+          "request_id"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditAction"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditActorRef"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "occurred_at": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/AuditResult"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AuditSeverity"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AuditTargetRef"
+          }
+        }
+      },
+      "AuditResult": {
+        "type": "string",
+        "description": "Closed audit result catalog. Unknown values cannot be stored.",
+        "enum": [
+          "success",
+          "failure",
+          "denied"
+        ]
+      },
+      "AuditSeverity": {
+        "type": "string",
+        "description": "Closed audit severity catalog. Unknown values cannot be stored.",
+        "enum": [
+          "info",
+          "warning",
+          "error",
+          "critical"
+        ]
+      },
+      "AuditTargetRef": {
+        "type": "object",
+        "description": "The target of an event. `type` and `id` are open strings: unknown future\ntarget types are rendered as stored, and `id` is null for `system` targets.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/AuditTargetType"
+          }
+        }
+      },
+      "AuditTargetType": {
+        "type": "string",
+        "description": "Open audit target type. Current catalog: user, role, session, audit_log, system. Values are additive; an unknown future value is returned as stored."
+      },
       "ChangePasswordRequest": {
         "type": "object",
         "description": "`POST /auth/change-password` request body.",
@@ -4191,6 +4746,10 @@
     {
       "name": "Permissions",
       "description": "The code-owned permission catalog"
+    },
+    {
+      "name": "Audit Logs",
+      "description": "Read-only audit log queries; detail reads append audit_log_accessed"
     }
   ]
 }

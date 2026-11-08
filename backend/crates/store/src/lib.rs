@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod audit;
+pub mod audit_logs;
 pub mod auth;
 pub mod identity;
 pub mod rbac;

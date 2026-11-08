@@ -1,0 +1,29 @@
+[package]
+name = "rs-admin-cli"
+description = "Offline management commands: super-admin bootstrap and break-glass recovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+dotenvy.workspace = true
+rpassword = "7.5.4"
+rs-admin-audit.workspace = true
+rs-admin-config.workspace = true
+rs-admin-domain.workspace = true
+rs-admin-security.workspace = true
+rs-admin-store.workspace = true
+secrecy.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

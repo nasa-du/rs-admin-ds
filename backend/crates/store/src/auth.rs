@@ -442,6 +442,10 @@ pub const REVOKE_REASON_EXCESS_SESSIONS: &str = "excess_sessions";
 /// password (spec §5.3, §5.9).
 pub const REVOKE_REASON_PASSWORD_CHANGE: &str = "password_change";
 
+/// Revocation reason for an administrative sweep: disabling, credential reset
+/// and the CLI commands (spec §5.9).
+pub const REVOKE_REASON_ADMIN_REVOKE: &str = "admin_revoke";
+
 /// Revoke every token in a session's family with the given reason.
 pub async fn revoke_refresh_family(
     transaction: &mut Transaction<'_, Postgres>,

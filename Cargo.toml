@@ -53,6 +53,7 @@ unicode-normalization = "0.1.26"
 uuid = { version = "1.29.0", features = ["v7", "serde"] }
 
 rs-admin-audit = { path = "backend/crates/audit" }
+rs-admin-cli = { path = "backend/crates/cli" }
 rs-admin-config = { path = "backend/crates/config" }
 rs-admin-domain = { path = "backend/crates/domain" }
 rs-admin-security = { path = "backend/crates/security" }

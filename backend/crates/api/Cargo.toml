@@ -35,6 +35,8 @@ uuid.workspace = true
 argon2.workspace = true
 ed25519-dalek = { version = "2.1.1", features = ["pkcs8", "pem"] }
 ipnet.workspace = true
+rs-admin-cli.workspace = true
+secrecy.workspace = true
 sqlx.workspace = true
 tempfile = "3"
 tower.workspace = true

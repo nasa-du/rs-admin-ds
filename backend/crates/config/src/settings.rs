@@ -28,6 +28,10 @@ pub struct AuthSettings {
 }
 
 impl AuthSettings {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_source(&|key| std::env::var(key).ok())
+    }
+
     pub fn from_source<F>(lookup: &F) -> Result<Self, ConfigError>
     where
         F: Fn(&str) -> Option<String>,

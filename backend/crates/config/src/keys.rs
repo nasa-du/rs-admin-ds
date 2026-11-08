@@ -38,6 +38,38 @@ pub struct AuditChainConfig {
     pub keys: AuditKeyRing,
 }
 
+impl AuditChainConfig {
+    /// Load only the audit chain key material. The management CLI needs this
+    /// and nothing else, so bootstrap/recovery do not require JWT or refresh
+    /// keys.
+    pub fn from_env() -> Result<Self, ConfigError> {
+        Self::from_source(&|key| std::env::var(key).ok())
+    }
+
+    pub fn from_source<F>(lookup: &F) -> Result<Self, ConfigError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let key_id = required(lookup, "AUDIT_CHAIN_KEY_ID")?;
+        let keyring_json = SecretString::from(required_secret(
+            lookup,
+            "AUDIT_CHAIN_KEYS",
+            "AUDIT_CHAIN_KEYS_FILE",
+        )?);
+        let keys =
+            AuditKeyRing::from_json(keyring_json.expose_secret(), &key_id).map_err(|error| {
+                match error {
+                    rs_admin_security::KeyError::CurrentKeyMissing => {
+                        ConfigError::Invalid("AUDIT_CHAIN_KEY_ID")
+                    }
+                    _ => ConfigError::Invalid("AUDIT_CHAIN_KEYS"),
+                }
+            })?;
+
+        Ok(Self { key_id, keys })
+    }
+}
+
 /// All key material used by authentication and audit.
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
@@ -87,21 +119,7 @@ impl SecurityConfig {
         )?;
         let throttle_key = hmac_key(lookup, "THROTTLE_KEY", "THROTTLE_KEY_FILE")?;
 
-        let key_id = required(lookup, "AUDIT_CHAIN_KEY_ID")?;
-        let keyring_json = SecretString::from(required_secret(
-            lookup,
-            "AUDIT_CHAIN_KEYS",
-            "AUDIT_CHAIN_KEYS_FILE",
-        )?);
-        let keys =
-            AuditKeyRing::from_json(keyring_json.expose_secret(), &key_id).map_err(|error| {
-                match error {
-                    rs_admin_security::KeyError::CurrentKeyMissing => {
-                        ConfigError::Invalid("AUDIT_CHAIN_KEY_ID")
-                    }
-                    _ => ConfigError::Invalid("AUDIT_CHAIN_KEYS"),
-                }
-            })?;
+        let audit_chain = AuditChainConfig::from_source(lookup)?;
 
         Ok(Self {
             jwt: JwtConfig {
@@ -116,7 +134,7 @@ impl SecurityConfig {
                 previous: refresh_previous,
             },
             throttle_key,
-            audit_chain: AuditChainConfig { key_id, keys },
+            audit_chain,
         })
     }
 }

@@ -39,6 +39,21 @@ fn document_targets_openapi_31_and_names_the_service() {
 }
 
 #[test]
+fn management_cli_commands_are_not_http_endpoints() {
+    let doc = document();
+    let paths = doc["paths"].as_object().expect("paths object");
+
+    // `bootstrap-super-admin` and `recover-super-admin` are offline commands
+    // (ADR-0003 §6); exposing either over HTTP is a security regression.
+    for path in paths.keys() {
+        assert!(
+            !path.contains("bootstrap") && !path.contains("recover"),
+            "management command leaked into the HTTP contract: {path}"
+        );
+    }
+}
+
+#[test]
 fn health_operations_have_stable_operation_ids_and_response_schemas() {
     let doc = document();
     let live = &doc["paths"]["/health/live"]["get"];

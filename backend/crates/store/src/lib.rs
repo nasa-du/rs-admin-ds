@@ -3,6 +3,7 @@
 //! This is the only crate that writes SQL. Errors never carry the database
 //! URL or credentials; callers may log the stable error message only.
 
+pub mod admin;
 pub mod audit;
 pub mod auth;
 pub mod identity;

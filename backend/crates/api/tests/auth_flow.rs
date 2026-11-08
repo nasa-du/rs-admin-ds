@@ -296,15 +296,7 @@ async fn an_expired_temporary_password_is_refused(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn a_temporary_password_creates_a_restricted_session(pool: PgPool) {
     let app = app(&pool).await;
-    insert_user(
-        &pool,
-        NewUser {
-            must_change_password: true,
-            temporary_password_expires_at: Some(Utc::now() + Duration::hours(72)),
-            ..NewUser::active("alice", "alice@example.com")
-        },
-    )
-    .await;
+    insert_user(&pool, NewUser::restricted("alice", "alice@example.com")).await;
 
     let (status, _headers, body) = login(&app, "alice", PASSWORD).await;
     assert_eq!(status, StatusCode::OK, "{body}");

@@ -10,7 +10,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
@@ -155,6 +155,15 @@ impl<'a> NewUser<'a> {
             role: None,
         }
     }
+
+    /// An active user holding a temporary password that expires in 72 hours.
+    pub fn restricted(username: &'a str, email: &'a str) -> Self {
+        Self {
+            must_change_password: true,
+            temporary_password_expires_at: Some(Utc::now() + Duration::hours(72)),
+            ..Self::active(username, email)
+        }
+    }
 }
 
 pub async fn insert_user(pool: &PgPool, user: NewUser<'_>) -> Uuid {
@@ -246,6 +255,33 @@ pub fn logout_request(raw: Option<&str>) -> Request<Body> {
         None => builder,
     };
     builder.body(Body::from("{}")).expect("logout request")
+}
+
+/// `POST /auth/change-password` with Bearer authentication and, when given, the
+/// refresh cookie the handler rotates on success.
+pub fn change_password_request(
+    token: &str,
+    raw_refresh: Option<&str>,
+    current_password: &str,
+    new_password: &str,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/change-password")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(raw) = raw_refresh {
+        builder = builder.header(header::COOKIE, format!("__Host-refresh={raw}"));
+    }
+    builder
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "current_password": current_password,
+                "new_password": new_password,
+            }))
+            .expect("json"),
+        ))
+        .expect("change-password request")
 }
 
 pub fn authorized_request(

@@ -5,8 +5,9 @@
 //! TypeScript client from the committed file.
 
 use crate::auth::{
-    LoginRequest, LoginResponse, LogoutRequest, ReauthenticateRequest, ReauthenticateResponse,
-    RefreshRequest, RefreshResponse, RoleRefResponse, UserSelfResponse,
+    ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutRequest,
+    ReauthenticateRequest, ReauthenticateResponse, RefreshRequest, RefreshResponse,
+    RoleRefResponse, UserSelfResponse,
 };
 use crate::error::{ErrorCodeSchema, FieldError, ProblemDetails};
 use crate::router::{HealthState, HealthStatus, openapi_router};
@@ -27,7 +28,7 @@ use utoipa::{Modify, OpenApi};
         (name = "Health", description = "Liveness and readiness probes"),
         (
             name = "Auth",
-            description = "Password login, sessions, current user and reauthentication"
+            description = "Password login, sessions, self-service password change, current user and reauthentication"
         )
     ),
     components(schemas(
@@ -36,6 +37,8 @@ use utoipa::{Modify, OpenApi};
         ErrorCodeSchema,
         HealthState,
         HealthStatus,
+        ChangePasswordRequest,
+        ChangePasswordResponse,
         LoginRequest,
         LoginResponse,
         LogoutRequest,

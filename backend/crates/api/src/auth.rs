@@ -1,13 +1,19 @@
-//! Authentication endpoints: password login, the current-user endpoint and
-//! step-up reauthentication (docs/specs/login-system.md §5.1–§5.8, §7.6).
+//! Authentication endpoints: password login, the current-user endpoint,
+//! self-service password change and step-up reauthentication
+//! (docs/specs/login-system.md §5.1–§5.8, §7.6).
 //!
 //! Login is the only place a refresh token is issued in this ticket. The raw
 //! value is returned exclusively through the `__Host-refresh` cookie; the
 //! database stores its SHA-256 digest. Access tokens are EdDSA JWTs kept in the
 //! client's memory and never persisted.
+//!
+//! Endpoints outside the restricted-session allowlist must extract
+//! [`Authenticated`]; only the allowlisted [`get_me`] and [`change_password`]
+//! may extract [`SessionPrincipal`]. Extracting the raw principal elsewhere
+//! would let a temporary-password session bypass the forced change.
 
 use crate::client_ip::ClientIp;
-use crate::error::ApiError;
+use crate::error::{ApiError, FieldError};
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
 use crate::router::AppState;
@@ -29,23 +35,27 @@ use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleGrant};
 use rs_admin_security::{
     ClientIpResolution, HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError,
-    PasswordService, TokenError, TrustedProxies, VerifyOutcome, derive_refresh_token,
-    exceeds_authentication_limit, generate_refresh_token, global_throttle_key, hash_refresh_token,
-    identifier_hmac_hex, identifier_throttle_key, ip_throttle_key,
+    PasswordPolicy, PasswordService, TokenError, TrustedProxies, VerifyOutcome,
+    derive_refresh_token, exceeds_authentication_limit, generate_refresh_token,
+    global_throttle_key, hash_refresh_token, identifier_hmac_hex, identifier_throttle_key,
+    ip_throttle_key, passwords_equal,
 };
 use rs_admin_store::Database;
 use rs_admin_store::audit::transaction_now;
 use rs_admin_store::auth::{
     AuthSession, AuthUser, FailureRecord, NewRefreshToken, NewSession,
     REVOKE_REASON_EXCESS_SESSIONS, REVOKE_REASON_LOGOUT, REVOKE_REASON_LOGOUT_ALL,
-    REVOKE_REASON_TOKEN_REUSE, RefreshContext, ThrottleScope, UserRole, bump_token_version,
-    clear_unknown_login_failures, count_active_sessions, create_session, database_clock_now,
+    REVOKE_REASON_PASSWORD_CHANGE, REVOKE_REASON_TOKEN_REUSE, RefreshContext, RefreshTokenRow,
+    ThrottleScope, UserRole, bump_token_version, clear_unknown_login_failures,
+    complete_password_change, count_active_sessions, create_session, database_clock_now,
     find_oldest_active_sessions, find_refresh_token, find_user_by_email, find_user_by_id,
     find_user_by_username, insert_refresh_token, known_account_lock_seconds, load_active_session,
-    load_login_throttle_locks, load_role_grants, lock_refresh_context, lock_user_row,
-    mark_refresh_token_rotated, record_known_login_failure, record_throttle_failure,
-    record_unknown_login_failure, release_expired_global_throttle, replace_password_hash,
-    reset_login_failures, revoke_session_family, revoke_user_refresh_tokens, revoke_user_sessions,
+    load_login_throttle_locks, load_role_grants, load_throttle_lock, lock_active_session,
+    lock_refresh_context, lock_user_row, mark_refresh_token_rotated, next_rotation_counter,
+    record_known_login_failure, record_throttle_failure, record_unknown_login_failure,
+    release_expired_global_throttle, replace_password_hash, reset_login_failures,
+    revoke_other_user_refresh_tokens, revoke_other_user_sessions, revoke_refresh_family,
+    revoke_session_family, revoke_user_refresh_tokens, revoke_user_sessions,
     touch_authenticated_at, touch_session_activity, unknown_account_lock_seconds,
     update_successful_login,
 };
@@ -158,16 +168,18 @@ pub enum AuthServiceError {
     Password(#[from] PasswordError),
 }
 
-/// The authenticated principal produced by the per-request pipeline.
+/// The authenticated principal produced by the per-request pipeline. This is
+/// the raw authentication result: callers on the restricted-session allowlist
+/// (`GET /auth/me`, `POST /auth/change-password`) use it directly.
 #[derive(Clone, Debug)]
-pub struct Authenticated {
+pub struct SessionPrincipal {
     pub user: AuthUser,
     pub session: AuthSession,
     pub roles: Vec<UserRole>,
     pub effective: EffectivePermissions,
 }
 
-impl FromRequestParts<AppState> for Authenticated {
+impl FromRequestParts<AppState> for SessionPrincipal {
     type Rejection = ApiError;
 
     async fn from_request_parts(
@@ -208,6 +220,27 @@ impl FromRequestParts<AppState> for Authenticated {
             roles,
             effective,
         })
+    }
+}
+
+/// A full-access principal. Every endpoint outside the restricted-session
+/// allowlist extracts this type, so a session that must change its password is
+/// refused with 403 `password_change_required` before the handler runs.
+#[derive(Clone, Debug)]
+pub struct Authenticated(pub SessionPrincipal);
+
+impl FromRequestParts<AppState> for Authenticated {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let principal = SessionPrincipal::from_request_parts(parts, state).await?;
+        if principal.user.must_change_password {
+            return Err(ApiError::new(ErrorCode::PasswordChangeRequired));
+        }
+        Ok(Self(principal))
     }
 }
 
@@ -267,6 +300,23 @@ pub struct ReauthenticateResponse {
     pub token_type: String,
     pub expires_in: i64,
     pub auth_time: i64,
+}
+
+/// `POST /auth/change-password` request body.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// `POST /auth/change-password` success body; the rotated refresh token is
+/// only in the `Set-Cookie` header.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct ChangePasswordResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
 }
 
 /// `POST /auth/refresh` request body. The refresh token travels only in the
@@ -472,7 +522,7 @@ pub async fn login(
         )
     )
 )]
-pub async fn get_me(principal: Authenticated) -> Json<UserSelfResponse> {
+pub async fn get_me(principal: SessionPrincipal) -> Json<UserSelfResponse> {
     Json(user_self(
         &principal.user,
         &principal.roles,
@@ -546,9 +596,7 @@ pub async fn reauthenticate(
     ApiJson(payload): ApiJson<ReauthenticateRequest>,
 ) -> Result<Json<ReauthenticateResponse>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
-    if principal.user.must_change_password {
-        return Err(ApiError::new(ErrorCode::PasswordChangeRequired));
-    }
+    let principal = principal.0;
     let audit = AuditContext {
         request_id: request_id.0,
         user_agent: user_agent(&headers),
@@ -695,6 +743,302 @@ pub async fn reauthenticate(
 
 #[utoipa::path(
     post,
+    path = "/api/v1/auth/change-password",
+    tag = "Auth",
+    operation_id = "changePassword",
+    security(("bearerAuth" = [])),
+    request_body = ChangePasswordRequest,
+    responses(
+        (
+            status = 200,
+            description = "Password changed; other sessions revoked and the current refresh token rotated",
+            body = ChangePasswordResponse,
+            headers(
+                ("Set-Cookie" = String, description = "Rotated host-only refresh cookie"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 401,
+            description = "Access token or session invalid",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("WWW-Authenticate" = String, description = "Bearer challenge"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 403,
+            description = "Account disabled",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 422,
+            description = "Current password invalid, password policy violation or unchanged password",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 429,
+            description = "Login throttled",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("Retry-After" = String, description = "Seconds until the next attempt"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 503,
+            description = "Authentication service unavailable",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
+pub async fn change_password(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    client_ip: ClientIp,
+    principal: SessionPrincipal,
+    ApiJson(payload): ApiJson<ChangePasswordRequest>,
+) -> Result<Response, ApiError> {
+    let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
+    let audit = AuditContext {
+        request_id: request_id.0,
+        user_agent: user_agent(&headers),
+        client_ip: client_ip.0,
+    };
+
+    // The account and IP layers guard this password check; the global circuit
+    // covers login and reauthentication only (spec §8.3).
+    ensure_change_password_layers_unlocked(services, &state, audit.client_ip, principal.user.id)
+        .await?;
+
+    let outcome =
+        verify_password(services, &payload.current_password, Some(&principal.user)).await?;
+    if !outcome.as_ref().is_some_and(|outcome| outcome.valid) {
+        let lock = record_counted_failure(
+            &state,
+            services,
+            FailureIdentity {
+                user: Some(&principal.user),
+                identifier_key: None,
+                identifier_hmac: None,
+            },
+            &audit,
+            AuditAction::AuthnPasswordChangeFail,
+            FailureSource::ChangePassword,
+        )
+        .await?;
+        return Err(lock.map_or_else(
+            || ApiError::new(ErrorCode::InvalidCurrentPassword),
+            lock_error,
+        ));
+    }
+
+    // Spec §5.7 step 2 evaluates the policy before the unchanged check.
+    if let Err(violation) = PasswordPolicy::new().validate(
+        &payload.new_password,
+        &[
+            &principal.user.username,
+            &principal.user.email,
+            &principal.user.display_name,
+        ],
+    ) {
+        return Err(
+            ApiError::new(ErrorCode::PasswordPolicyViolation).with_errors(vec![FieldError {
+                pointer: "/new_password".to_owned(),
+                code: ErrorCode::PasswordPolicyViolation.as_str().to_owned(),
+                params: Some(serde_json::json!({ "reason": violation.as_reason() })),
+            }]),
+        );
+    }
+    if passwords_equal(&payload.current_password, &payload.new_password) {
+        return Err(ApiError::new(ErrorCode::PasswordUnchanged));
+    }
+
+    let new_hash = services
+        .passwords
+        .hash(&payload.new_password)
+        .await
+        .map_err(password_unavailable)?;
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    // Lock the user row first, matching login, reauthentication and
+    // logout-all, so the token-version and session sweep are serialized per
+    // user.
+    let locked = lock_user_row(&mut transaction, principal.user.id)
+        .await
+        .map_err(dependency_unavailable)?
+        .ok_or_else(ApiError::session_invalid)?;
+    // A lock established after the pre-check still refuses the change.
+    if let Some(seconds) = known_account_lock_seconds(&mut *transaction, locked.id)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        transaction.rollback().await.ok();
+        return Err(login_locked(seconds));
+    }
+    if !locked.is_active() {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::AccountDisabled));
+    }
+    // A concurrent credential reset or password change invalidates the
+    // verification performed above.
+    if locked.token_version != principal.user.token_version
+        || locked.password_hash != principal.user.password_hash
+    {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    }
+
+    // The session lock serializes this rotation against a concurrent refresh
+    // of the same token family.
+    let Some(session) = lock_active_session(&mut transaction, principal.session.id, locked.id)
+        .await
+        .map_err(dependency_unavailable)?
+    else {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    };
+    let now = database_clock_now(&mut transaction)
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let sessions_revoked = revoke_other_user_sessions(
+        &mut transaction,
+        locked.id,
+        session.id,
+        REVOKE_REASON_PASSWORD_CHANGE,
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+    revoke_other_user_refresh_tokens(
+        &mut transaction,
+        locked.id,
+        session.id,
+        REVOKE_REASON_PASSWORD_CHANGE,
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+
+    let Some(new_version) = complete_password_change(
+        &mut transaction,
+        locked.id,
+        &principal.user.password_hash,
+        &new_hash,
+    )
+    .await
+    .map_err(dependency_unavailable)?
+    else {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    };
+
+    let authenticated_at = touch_authenticated_at(&mut transaction, session.id)
+        .await
+        .map_err(dependency_unavailable)?
+        .ok_or_else(ApiError::session_invalid)?;
+
+    // The response always carries a usable refresh cookie. Without a usable
+    // presentation the old family is retired and a fresh root is issued.
+    let rotated_refresh = match refresh_token_from_cookie(&headers) {
+        Some(presented_raw) => {
+            match rotate_current_refresh_token(
+                &mut transaction,
+                services,
+                session.id,
+                presented_raw,
+                now,
+                session.absolute_expires_at,
+            )
+            .await?
+            {
+                Some(raw) => raw,
+                None => {
+                    reset_current_refresh_token(
+                        &mut transaction,
+                        session.id,
+                        session.absolute_expires_at,
+                    )
+                    .await?
+                }
+            }
+        }
+        None => {
+            reset_current_refresh_token(&mut transaction, session.id, session.absolute_expires_at)
+                .await?
+        }
+    };
+
+    let event = with_user_agent(
+        AuditEvent::builder(
+            AuditAction::AuthnPasswordChanged,
+            AuditResult::Success,
+            AuditActor::user(locked.id, locked.username.clone()),
+            request_id.0,
+        )
+        .target(
+            TargetType::User,
+            Some(locked.id),
+            Some(locked.username.clone()),
+        )
+        .detail("sessions_revoked_count", sessions_revoked as i64)
+        .ip(audit.client_ip),
+        audit.user_agent,
+    )
+    .build()
+    .map_err(audit_event_invalid)?;
+    services
+        .audit
+        .write_in_tx(&mut transaction, &event)
+        .await
+        .map_err(audit_unavailable)?;
+
+    transaction.commit().await.map_err(dependency_unavailable)?;
+
+    let (access_token, _claims) = services
+        .jwt
+        .sign_access_token(
+            locked.id,
+            session.id,
+            new_version,
+            authenticated_at.timestamp(),
+            Utc::now().timestamp(),
+        )
+        .map_err(|error| internal_error("access token signing failed", error))?;
+
+    let mut response = Json(ChangePasswordResponse {
+        access_token,
+        token_type: TOKEN_TYPE.to_owned(),
+        expires_in: JWT_ACCESS_TOKEN_TTL_SECONDS,
+    })
+    .into_response();
+    let max_age = (session.absolute_expires_at - now)
+        .num_seconds()
+        .clamp(0, REFRESH_COOKIE_MAX_AGE_SECONDS);
+    response.headers_mut().insert(
+        SET_COOKIE,
+        refresh_cookie_with_max_age(&rotated_refresh, max_age),
+    );
+    Ok(response)
+}
+
+#[utoipa::path(
+    post,
     path = "/api/v1/auth/refresh",
     tag = "Auth",
     operation_id = "refreshToken",
@@ -797,20 +1141,16 @@ pub async fn refresh(
 
     match context.token.used_at {
         None => {
-            let successor_raw = rotate_refresh_token(
-                &mut transaction,
-                services,
-                &context,
-                &presented_raw,
-                &presented_hash,
-                now,
-            )
-            .await?;
+            let successor_raw =
+                rotate_refresh_token(&mut transaction, services, &context, &presented_raw, now)
+                    .await?;
             transaction.commit().await.map_err(dependency_unavailable)?;
             refresh_response(services, &context, &successor_raw, now)
         }
         Some(used_at) if now - used_at <= Duration::seconds(REFRESH_GRACE_SECONDS) => {
-            match walk_grace_chain(&mut transaction, services, &presented_raw, &context).await? {
+            match walk_grace_chain(&mut transaction, services, &presented_raw, &context.token)
+                .await?
+            {
                 Some(successor_raw) => {
                     // A grace retry writes nothing: no rotation, no audit and
                     // no activity update.
@@ -995,9 +1335,7 @@ pub async fn logout_all(
     ApiJson(_payload): ApiJson<LogoutRequest>,
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
-    if principal.user.must_change_password {
-        return Err(ApiError::new(ErrorCode::PasswordChangeRequired));
-    }
+    let principal = principal.0;
     let user_agent = user_agent(&headers);
 
     let mut transaction = state
@@ -1071,6 +1409,130 @@ fn logout_response() -> Response {
         .into_response()
 }
 
+/// Rotate the refresh token presented by the browser during a self-service
+/// password change. A token consumed by a concurrent refresh inside the grace
+/// window is followed to the family's current tail, so the browser keeps
+/// receiving a live cookie. Missing, revoked, expired or out-of-grace values
+/// return `None`; the caller then retires the family and mints a fresh root.
+async fn rotate_current_refresh_token(
+    transaction: &mut Transaction<'_, Postgres>,
+    services: &AuthServices,
+    session_id: Uuid,
+    presented_raw: &str,
+    now: DateTime<Utc>,
+    absolute_expires_at: DateTime<Utc>,
+) -> Result<Option<String>, ApiError> {
+    let presented_hash = hash_refresh_token(presented_raw);
+    let Some(token) = find_refresh_token(transaction, &presented_hash)
+        .await
+        .map_err(dependency_unavailable)?
+    else {
+        return Ok(None);
+    };
+    if token.session_id != session_id || token.revoked_at.is_some() || token.expires_at <= now {
+        return Ok(None);
+    }
+
+    let (tail, tail_raw) = match token.used_at {
+        None => (token, presented_raw.to_owned()),
+        Some(used_at) if now - used_at <= Duration::seconds(REFRESH_GRACE_SECONDS) => {
+            let Some(tail_raw) =
+                walk_grace_chain(transaction, services, presented_raw, &token).await?
+            else {
+                return Ok(None);
+            };
+            let tail_hash = hash_refresh_token(&tail_raw);
+            let Some(tail) = find_refresh_token(transaction, &tail_hash)
+                .await
+                .map_err(dependency_unavailable)?
+            else {
+                return Ok(None);
+            };
+            if tail.used_at.is_some() || tail.revoked_at.is_some() || tail.expires_at <= now {
+                return Ok(None);
+            }
+            (tail, tail_raw)
+        }
+        Some(_) => return Ok(None),
+    };
+
+    rotate_token(
+        transaction,
+        services,
+        &tail,
+        &tail_raw,
+        now,
+        absolute_expires_at,
+    )
+    .await
+}
+
+/// Derive the successor of `raw`, mark the presented token row used and
+/// persist the successor's SHA-256. Callers hold the session lock. Returns
+/// `None` when the row was already consumed or revoked.
+async fn rotate_token(
+    transaction: &mut Transaction<'_, Postgres>,
+    services: &AuthServices,
+    token: &RefreshTokenRow,
+    raw: &str,
+    now: DateTime<Utc>,
+    absolute_expires_at: DateTime<Utc>,
+) -> Result<Option<String>, ApiError> {
+    let counter = token.rotation_counter + 1;
+    let successor_raw = derive_refresh_token(&services.refresh_derivation.current, raw, counter);
+    let successor_hash = hash_refresh_token(&successor_raw);
+    let marked =
+        mark_refresh_token_rotated(transaction, &hash_refresh_token(raw), &successor_hash, now)
+            .await
+            .map_err(dependency_unavailable)?;
+    if !marked {
+        return Ok(None);
+    }
+    insert_refresh_token(
+        transaction,
+        NewRefreshToken {
+            token_hash: &successor_hash,
+            session_id: token.session_id,
+            rotation_counter: counter,
+            expires_at: absolute_expires_at,
+        },
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+    Ok(Some(successor_raw))
+}
+
+/// Replace a session's refresh family with a fresh root when no usable token
+/// was presented. The new token has no predecessor, so stale values fail as
+/// invalid rather than as reuse.
+async fn reset_current_refresh_token(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    absolute_expires_at: DateTime<Utc>,
+) -> Result<String, ApiError> {
+    revoke_refresh_family(transaction, session_id, REVOKE_REASON_PASSWORD_CHANGE)
+        .await
+        .map_err(dependency_unavailable)?;
+    let counter = next_rotation_counter(transaction, session_id)
+        .await
+        .map_err(dependency_unavailable)?;
+    let raw = generate_refresh_token()
+        .map_err(|error: TokenError| internal_error("refresh token generation failed", error))?;
+    let hash = hash_refresh_token(&raw);
+    insert_refresh_token(
+        transaction,
+        NewRefreshToken {
+            token_hash: &hash,
+            session_id,
+            rotation_counter: counter,
+            expires_at: absolute_expires_at,
+        },
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+    Ok(raw)
+}
+
 /// Rotate an unused token: mark it used, link it to the HMAC-derived
 /// successor, persist the successor's SHA-256 and slide the idle deadline.
 /// Returns the raw successor; the caller commits.
@@ -1079,34 +1541,22 @@ async fn rotate_refresh_token(
     services: &AuthServices,
     context: &RefreshContext,
     presented_raw: &str,
-    presented_hash: &[u8; 32],
     now: DateTime<Utc>,
 ) -> Result<String, ApiError> {
-    let counter = context.token.rotation_counter + 1;
-    let successor_raw =
-        derive_refresh_token(&services.refresh_derivation.current, presented_raw, counter);
-    let successor_hash = hash_refresh_token(&successor_raw);
-
-    let marked = mark_refresh_token_rotated(transaction, presented_hash, &successor_hash, now)
-        .await
-        .map_err(dependency_unavailable)?;
-    if !marked {
+    let Some(successor_raw) = rotate_token(
+        transaction,
+        services,
+        &context.token,
+        presented_raw,
+        now,
+        context.absolute_expires_at,
+    )
+    .await?
+    else {
         // The session lock serializes rotations, so this only happens if
         // another writer bypassed the refresh path. Fail closed as invalid.
         return Err(ApiError::new(ErrorCode::RefreshTokenInvalid));
-    }
-
-    insert_refresh_token(
-        transaction,
-        NewRefreshToken {
-            token_hash: &successor_hash,
-            session_id: context.token.session_id,
-            rotation_counter: counter,
-            expires_at: context.absolute_expires_at,
-        },
-    )
-    .await
-    .map_err(dependency_unavailable)?;
+    };
 
     // Activity updates are throttled so a chatty client cannot turn every
     // refresh into a session write (spec §5.3).
@@ -1126,16 +1576,17 @@ async fn rotate_refresh_token(
 
 /// Walk `replaced_by_hash` from a token used inside its grace window and return
 /// the raw value of the current tail token. Any missing, revoked or
-/// inconsistent step returns `None`, which the caller treats as reuse.
+/// inconsistent step returns `None`: refresh treats that as reuse, while a
+/// password change retires the family and mints a fresh root.
 async fn walk_grace_chain(
     transaction: &mut Transaction<'_, Postgres>,
     services: &AuthServices,
     presented_raw: &str,
-    presented: &RefreshContext,
+    presented: &RefreshTokenRow,
 ) -> Result<Option<String>, ApiError> {
     let mut current_raw = presented_raw.to_owned();
-    let mut current_counter = presented.token.rotation_counter;
-    let mut current_successor = presented.token.replaced_by_hash.clone();
+    let mut current_counter = presented.rotation_counter;
+    let mut current_successor = presented.replaced_by_hash.clone();
 
     // The chain is acyclic: every step increments the counter, and a step is
     // accepted only when the HMAC-derived token hashes to the stored pointer.
@@ -1157,7 +1608,7 @@ async fn walk_grace_chain(
         else {
             return Ok(None);
         };
-        if next.session_id != presented.token.session_id
+        if next.session_id != presented.session_id
             || next.rotation_counter != counter
             || next.revoked_at.is_some()
         {
@@ -1570,6 +2021,7 @@ struct FailureIdentity<'a> {
 enum FailureSource {
     Login,
     Reauth,
+    ChangePassword,
 }
 
 impl FailureSource {
@@ -1577,7 +2029,14 @@ impl FailureSource {
         match self {
             Self::Login => "login",
             Self::Reauth => "reauth",
+            Self::ChangePassword => "change_password",
         }
+    }
+
+    /// The global circuit deliberately covers login and reauthentication only,
+    /// not self-service password changes (spec §8.3).
+    const fn counts_global(self) -> bool {
+        matches!(self, Self::Login | Self::Reauth)
     }
 }
 
@@ -1655,9 +2114,42 @@ async fn ensure_shared_layers_unlocked(
     }
 }
 
-/// Count one bad credential at all three layers and write the failure plus any
+/// Enforce the IP and account layers before hashing a current password for a
+/// self-service change. The global circuit does not cover this endpoint, so
+/// its state is neither read nor cleared here.
+async fn ensure_change_password_layers_unlocked(
+    services: &AuthServices,
+    state: &AppState,
+    client_ip: IpAddr,
+    user_id: Uuid,
+) -> Result<(), ApiError> {
+    let ip_key = ip_throttle_key(&services.throttle_key, client_ip);
+    // A locked IP layer refuses without hashing (spec §8.3); only the account
+    // layer pays for a dummy verification while locked.
+    if let Some(seconds) = load_throttle_lock(state.database.pool(), ThrottleScope::Ip, &ip_key)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        return Err(rate_limited(seconds));
+    }
+    if let Some(seconds) = known_account_lock_seconds(state.database.pool(), user_id)
+        .await
+        .map_err(dependency_unavailable)?
+    {
+        services
+            .passwords
+            .verify_dummy()
+            .await
+            .map_err(password_unavailable)?;
+        return Err(login_locked(seconds));
+    }
+    Ok(())
+}
+
+/// Count one bad credential at the account and IP layers — plus the global
+/// layer for login and reauthentication — and write the failure plus any
 /// threshold audit events in the same transaction. Returns a refusal when one
-/// of the layers is (or just became) locked.
+/// of the counted layers is (or just became) locked.
 async fn record_counted_failure(
     state: &AppState,
     services: &AuthServices,
@@ -1668,7 +2160,6 @@ async fn record_counted_failure(
 ) -> Result<Option<LockRefusal>, ApiError> {
     let settings = &services.settings;
     let ip_key = ip_throttle_key(&services.throttle_key, audit.client_ip);
-    let global_key = global_throttle_key(&services.throttle_key);
 
     let mut transaction = state
         .database
@@ -1702,16 +2193,23 @@ async fn record_counted_failure(
     )
     .await
     .map_err(dependency_unavailable)?;
-    let global = record_throttle_failure(
-        &mut transaction,
-        ThrottleScope::Global,
-        &global_key,
-        settings.login_global_window,
-        settings.login_global_lock,
-        i64::from(settings.login_global_circuit_limit),
-    )
-    .await
-    .map_err(dependency_unavailable)?;
+    let global = if source.counts_global() {
+        let global_key = global_throttle_key(&services.throttle_key);
+        Some(
+            record_throttle_failure(
+                &mut transaction,
+                ThrottleScope::Global,
+                &global_key,
+                settings.login_global_window,
+                settings.login_global_lock,
+                i64::from(settings.login_global_circuit_limit),
+            )
+            .await
+            .map_err(dependency_unavailable)?,
+        )
+    } else {
+        None
+    };
 
     let (actor, target) = match identity.user {
         Some(user) => (
@@ -1767,7 +2265,9 @@ async fn record_counted_failure(
     }
 
     // The first failure that crosses an IP/global lock threshold.
-    for (scope, record) in [(ThrottleScope::Ip, ip), (ThrottleScope::Global, global)] {
+    let shared = std::iter::once((ThrottleScope::Ip, ip))
+        .chain(global.map(|record| (ThrottleScope::Global, record)));
+    for (scope, record) in shared {
         if let FailureRecord::Counted {
             failed_count,
             retry_after_seconds: Some(seconds),
@@ -1792,7 +2292,7 @@ async fn record_counted_failure(
         }
     }
 
-    if let FailureRecord::Counted { failed_count, .. } = global
+    if let Some(FailureRecord::Counted { failed_count, .. }) = global
         && i64::from(failed_count) == i64::from(settings.login_global_alert_limit)
     {
         // ADR-0005 §9.2 restricts application log fields; the alert is the
@@ -1804,7 +2304,7 @@ async fn record_counted_failure(
 
     // IP/global refusals take precedence over an account lock so the client
     // backs off once for the whole address or service.
-    let shared_retry = [retry_seconds(&ip), retry_seconds(&global)]
+    let shared_retry = [retry_seconds(&ip), global.as_ref().and_then(retry_seconds)]
         .into_iter()
         .flatten()
         .max();

@@ -104,7 +104,7 @@
 |---|---|---|
 | `authn_login_success` | info | 登录成功（含受限会话） |
 | `authn_login_fail` | warning | 密码错误、未知标识、停用、临时密码过期 |
-| `authn_login_lock` | warning | 账号层达到锁定阈值（登录或重新认证） |
+| `authn_login_lock` | warning | 账号层达到锁定阈值（登录、重新认证或自助改密） |
 | `authn_login_rate_limited` | warning | IP/全局层首次触发锁定 |
 | `authn_logout` | info | 当前会话登出 |
 | `authn_logout_all` | info | 全部会话登出 |
@@ -142,7 +142,7 @@
   - 登录失败：`reason_code`（`bad_credentials`/`account_disabled`/`temporary_password_expired`）；未知标识附 `identifier_hmac`。
   - 登录成功/重新认证：`auth_method=password`、`session_id`、`must_change_password`（登录）；`auth_time`（重新认证）。
   - 登出：`session_id`；全部登出：`sessions_revoked_count`。
-  - 锁定/限流：`lock_seconds`、`failure_count`、`source`（`login`/`reauth`）或 `scope`（`ip`/`global`）、`retry_after_seconds`。
+  - 锁定/限流：`lock_seconds`、`failure_count`、`source`（`login`/`reauth`/`change_password`）或 `scope`（`ip`/`global`）、`retry_after_seconds`。
   - 刷新复用：`session_id`、`rotation_counter`、`family_revoked=true`。
   - 会话淘汰：`evicted_session_id`、`new_session_id`。
   - 改密：`sessions_revoked_count`；失败附 `reason_code`。
@@ -288,6 +288,9 @@
 - 2026-11-07：[前端认证集成与路由守卫](https://github.com/nasa-du/rs-admin-ds/issues/12) 修订 §7.4 CORS credentials 允许清单：
   - 增加 `POST /auth/change-password` 与 `POST /auth/logout-all`。两者都可能设置或清除 `__Host-refresh` Cookie（change-password 轮换 refresh token，logout-all 清除 Cookie），跨源响应必须带 `Access-Control-Allow-Credentials: true` 且 `Access-Control-Allow-Origin` 为具体前端 origin；前端对这两个端点使用 `withCredentials: true`。
   - 其余 credentials 端点保持 `/auth/login`、`/auth/refresh`、`/auth/logout`；`GET/PATCH /auth/me` 与 `POST /auth/reauthenticate` 只用 Bearer、不需要 credentials。
+- 2026-11-08：[自助改密 + 临时密码受限会话](https://github.com/nasa-du/rs-admin-ds/issues/32) 修订 §6.1/§6.2：
+  - 自助改密当前密码失败计入账号层与 IP 层；账号层达到锁定阈值时写 `authn_login_lock`，`source` 新增取值 `change_password`。
+  - `POST /auth/change-password` 读取 `__Host-refresh` Cookie 仅用于轮换当前会话的刷新令牌；端点鉴权仍只用 Bearer，不要求 CSRF 头。
 
 ## Consequences
 

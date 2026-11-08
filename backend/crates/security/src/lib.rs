@@ -16,7 +16,7 @@ pub use jwt::{
 pub use password::{
     ARGON2_MEMORY_KIB, ARGON2_OUTPUT_BYTES, ARGON2_PARALLELISM, ARGON2_TIME_COST,
     PASSWORD_MAX_BYTES, PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, PasswordError, PasswordPolicy,
-    PasswordService, PolicyViolation, VerifyOutcome, exceeds_authentication_limit,
+    PasswordService, PolicyViolation, VerifyOutcome, exceeds_authentication_limit, passwords_equal,
 };
 pub use throttle::{
     ClientIpResolution, ClientIpSource, TrustedProxies, account_lock_seconds, global_throttle_key,

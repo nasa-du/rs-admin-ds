@@ -186,6 +186,47 @@ fn refresh_is_documented_with_a_cookie_scheme_and_stable_operation_id() {
 }
 
 #[test]
+fn change_password_is_documented_with_a_stable_id_and_bearer_security() {
+    let doc = document();
+    let change = &doc["paths"]["/api/v1/auth/change-password"]["post"];
+
+    assert_eq!(change["operationId"], "changePassword");
+    assert_eq!(change["tags"][0], "Auth");
+    assert_eq!(
+        change["security"][0]["bearerAuth"],
+        serde_json::json!([]),
+        "change-password authenticates by access token"
+    );
+    assert_eq!(
+        change["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ChangePasswordRequest"
+    );
+    assert_eq!(
+        change["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ChangePasswordResponse"
+    );
+    assert!(
+        change["responses"]["200"]["headers"]["Set-Cookie"].is_object(),
+        "change-password documents the rotated cookie"
+    );
+    for status in ["401", "403", "422", "429", "503"] {
+        assert_eq!(
+            change["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "response {status} must use the problem contract"
+        );
+    }
+    assert!(
+        change["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+        "401 must document the Bearer challenge"
+    );
+    assert!(
+        change["responses"]["429"]["headers"]["Retry-After"].is_object(),
+        "429 must document Retry-After"
+    );
+}
+
+#[test]
 fn logout_operations_are_documented_with_stable_ids_and_their_auth_scheme() {
     let doc = document();
 

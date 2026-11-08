@@ -340,6 +340,121 @@
         ]
       }
     },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "refreshToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Rotated refresh token; new access token and refresh cookie issued",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Rotated host-only refresh cookie"
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefreshResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refresh token invalid, session invalid or reuse detected",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Cleared refresh cookie on reuse"
+              },
+              "WWW-Authenticate": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Bearer challenge"
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account disabled",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication service unavailable",
+            "headers": {
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request id"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "refreshCookie": []
+          }
+        ]
+      }
+    },
     "/health/live": {
       "get": {
         "tags": [
@@ -632,6 +747,32 @@
           }
         }
       },
+      "RefreshRequest": {
+        "type": "object",
+        "description": "`POST /auth/refresh` request body. The refresh token travels only in the\n`__Host-refresh` cookie, so the body is an empty JSON object.",
+        "additionalProperties": false
+      },
+      "RefreshResponse": {
+        "type": "object",
+        "description": "`POST /auth/refresh` success body; the rotated refresh token is only in the\n`Set-Cookie` header.",
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "token_type": {
+            "type": "string"
+          }
+        }
+      },
       "RoleRefResponse": {
         "type": "object",
         "description": "A role as exposed by `/auth/me` and the login response.",
@@ -720,6 +861,11 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT"
+      },
+      "refreshCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-refresh"
       }
     }
   },

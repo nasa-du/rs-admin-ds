@@ -13,7 +13,7 @@ use crate::router::AppState;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{FromRequestParts, State};
-use axum::http::header::{AUTHORIZATION, SET_COOKIE, USER_AGENT};
+use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE, USER_AGENT};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -21,25 +21,28 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use rs_admin_audit::{
     AuditAction, AuditActor, AuditEvent, AuditEventBuilder, AuditResult, AuditWriter, TargetType,
 };
-use rs_admin_config::{AuthSettings, SecurityConfig};
+use rs_admin_config::{AuthSettings, RotationKeys, SecurityConfig};
 use rs_admin_domain::ErrorCode;
 use rs_admin_domain::identity::{Email, Username};
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleGrant};
 use rs_admin_security::{
     HmacKey, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtIssuer, PasswordError, PasswordService, TokenError,
-    VerifyOutcome, exceeds_authentication_limit, generate_refresh_token, hash_refresh_token,
-    identifier_hmac_hex,
+    VerifyOutcome, derive_refresh_token, exceeds_authentication_limit, generate_refresh_token,
+    hash_refresh_token, identifier_hmac_hex,
 };
 use rs_admin_store::Database;
 use rs_admin_store::audit::transaction_now;
 use rs_admin_store::auth::{
-    AuthSession, AuthUser, NewRefreshToken, NewSession, UserRole, create_session,
-    find_user_by_email, find_user_by_id, find_user_by_username, insert_refresh_token,
-    load_active_session, load_role_grants, lock_user_for_login, record_login_failure,
-    replace_password_hash, reset_login_failures, touch_authenticated_at, update_successful_login,
+    AuthSession, AuthUser, NewRefreshToken, NewSession, REVOKE_REASON_TOKEN_REUSE, RefreshContext,
+    UserRole, create_session, database_clock_now, find_refresh_token, find_user_by_email,
+    find_user_by_id, find_user_by_username, insert_refresh_token, load_active_session,
+    load_role_grants, lock_refresh_context, lock_user_for_login, mark_refresh_token_rotated,
+    record_login_failure, replace_password_hash, reset_login_failures, revoke_refresh_family,
+    revoke_session, touch_authenticated_at, touch_session_activity, update_successful_login,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 use std::str::FromStr;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -60,6 +63,14 @@ pub const SESSION_ABSOLUTE_SECONDS: i64 = 12 * 60 * 60;
 /// Largest accepted authentication request body (spec §8.1).
 pub const AUTH_JSON_BODY_BYTES: usize = 1024;
 
+/// Window after a rotation in which the previous token may be retried and
+/// returns the same successor without another rotation (spec §5.2).
+pub const REFRESH_GRACE_SECONDS: i64 = 30;
+
+/// Minimum spacing between `last_seen_at` / `idle_expires_at` updates
+/// (spec §5.3).
+pub const SESSION_ACTIVITY_TOUCH_SECONDS: i64 = 60;
+
 const TOKEN_TYPE: &str = "Bearer";
 
 /// Authentication services built once at startup.
@@ -69,6 +80,7 @@ pub struct AuthServices {
     passwords: PasswordService,
     audit: AuditWriter,
     throttle_key: HmacKey,
+    refresh_derivation: RotationKeys,
 }
 
 impl AuthServices {
@@ -97,6 +109,7 @@ impl AuthServices {
             passwords,
             audit: AuditWriter::new(security.audit_chain.keys.clone()),
             throttle_key: security.throttle_key.clone(),
+            refresh_derivation: security.refresh_derivation.clone(),
         })
     }
 }
@@ -220,6 +233,21 @@ pub struct ReauthenticateResponse {
     pub token_type: String,
     pub expires_in: i64,
     pub auth_time: i64,
+}
+
+/// `POST /auth/refresh` request body. The refresh token travels only in the
+/// `__Host-refresh` cookie, so the body is an empty JSON object.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RefreshRequest {}
+
+/// `POST /auth/refresh` success body; the rotated refresh token is only in the
+/// `Set-Cookie` header.
+#[derive(Clone, Debug, Serialize, ToSchema)]
+pub struct RefreshResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
 }
 
 #[utoipa::path(
@@ -536,6 +564,365 @@ pub async fn reauthenticate(
         expires_in: JWT_ACCESS_TOKEN_TTL_SECONDS,
         auth_time: authenticated_at.timestamp(),
     }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/refresh",
+    tag = "Auth",
+    operation_id = "refreshToken",
+    security(("refreshCookie" = [])),
+    request_body = RefreshRequest,
+    responses(
+        (
+            status = 200,
+            description = "Rotated refresh token; new access token and refresh cookie issued",
+            body = RefreshResponse,
+            headers(
+                ("Set-Cookie" = String, description = "Rotated host-only refresh cookie"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 401,
+            description = "Refresh token invalid, session invalid or reuse detected",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("WWW-Authenticate" = String, description = "Bearer challenge"),
+                ("Set-Cookie" = String, description = "Cleared refresh cookie on reuse"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 403,
+            description = "Account disabled",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 503,
+            description = "Authentication service unavailable",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
+pub async fn refresh(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    ApiJson(_payload): ApiJson<RefreshRequest>,
+) -> Result<Response, ApiError> {
+    let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
+    let user_agent = user_agent(&headers);
+    let presented_raw = refresh_token_from_cookie(&headers)
+        .ok_or_else(|| ApiError::new(ErrorCode::RefreshTokenInvalid))?
+        .to_owned();
+    let presented_hash = hash_refresh_token(&presented_raw);
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let Some(context) = lock_refresh_context(&mut transaction, &presented_hash)
+        .await
+        .map_err(dependency_unavailable)?
+    else {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::RefreshTokenInvalid));
+    };
+
+    // The database clock is authoritative for every expiry comparison. This is
+    // read after the session lock, so it is not a pre-wait transaction-start
+    // time.
+    let now = database_clock_now(&mut transaction)
+        .await
+        .map_err(dependency_unavailable)?;
+
+    // Refresh tokens carry no access-token `ver` claim. Every action that
+    // bumps `users.token_version` also revokes the session, so the session
+    // check below is the version-consistency check required by spec §5.2.
+    //
+    // Account state is checked before token state so a disabled user's next
+    // refresh reliably returns 403 even when disabling also revoked sessions.
+    if !context.user_is_active() {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::AccountDisabled));
+    }
+    if context.session_revoked_at.is_some()
+        || context.idle_expires_at <= now
+        || context.absolute_expires_at <= now
+    {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    }
+    if context.token.revoked_at.is_some() || context.token.expires_at <= now {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::RefreshTokenInvalid));
+    }
+
+    match context.token.used_at {
+        None => {
+            let successor_raw = rotate_refresh_token(
+                &mut transaction,
+                services,
+                &context,
+                &presented_raw,
+                &presented_hash,
+                now,
+            )
+            .await?;
+            transaction.commit().await.map_err(dependency_unavailable)?;
+            refresh_response(services, &context, &successor_raw, now)
+        }
+        Some(used_at) if now - used_at <= Duration::seconds(REFRESH_GRACE_SECONDS) => {
+            match walk_grace_chain(&mut transaction, services, &presented_raw, &context).await? {
+                Some(successor_raw) => {
+                    // A grace retry writes nothing: no rotation, no audit and
+                    // no activity update.
+                    transaction.rollback().await.ok();
+                    refresh_response(services, &context, &successor_raw, now)
+                }
+                None => {
+                    let error = reject_refresh_reuse(
+                        &mut transaction,
+                        services,
+                        &context,
+                        request_id.0,
+                        user_agent,
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(dependency_unavailable)?;
+                    Err(error)
+                }
+            }
+        }
+        Some(_) => {
+            let error = reject_refresh_reuse(
+                &mut transaction,
+                services,
+                &context,
+                request_id.0,
+                user_agent,
+            )
+            .await?;
+            transaction.commit().await.map_err(dependency_unavailable)?;
+            Err(error)
+        }
+    }
+}
+
+/// Rotate an unused token: mark it used, link it to the HMAC-derived
+/// successor, persist the successor's SHA-256 and slide the idle deadline.
+/// Returns the raw successor; the caller commits.
+async fn rotate_refresh_token(
+    transaction: &mut Transaction<'_, Postgres>,
+    services: &AuthServices,
+    context: &RefreshContext,
+    presented_raw: &str,
+    presented_hash: &[u8; 32],
+    now: DateTime<Utc>,
+) -> Result<String, ApiError> {
+    let counter = context.token.rotation_counter + 1;
+    let successor_raw =
+        derive_refresh_token(&services.refresh_derivation.current, presented_raw, counter);
+    let successor_hash = hash_refresh_token(&successor_raw);
+
+    let marked = mark_refresh_token_rotated(transaction, presented_hash, &successor_hash, now)
+        .await
+        .map_err(dependency_unavailable)?;
+    if !marked {
+        // The session lock serializes rotations, so this only happens if
+        // another writer bypassed the refresh path. Fail closed as invalid.
+        return Err(ApiError::new(ErrorCode::RefreshTokenInvalid));
+    }
+
+    insert_refresh_token(
+        transaction,
+        NewRefreshToken {
+            token_hash: &successor_hash,
+            session_id: context.token.session_id,
+            rotation_counter: counter,
+            expires_at: context.absolute_expires_at,
+        },
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+
+    // Activity updates are throttled so a chatty client cannot turn every
+    // refresh into a session write (spec §5.3).
+    if now - context.last_seen_at >= Duration::seconds(SESSION_ACTIVITY_TOUCH_SECONDS) {
+        touch_session_activity(
+            transaction,
+            context.token.session_id,
+            now,
+            now + Duration::seconds(SESSION_IDLE_SECONDS),
+        )
+        .await
+        .map_err(dependency_unavailable)?;
+    }
+
+    Ok(successor_raw)
+}
+
+/// Walk `replaced_by_hash` from a token used inside its grace window and return
+/// the raw value of the current tail token. Any missing, revoked or
+/// inconsistent step returns `None`, which the caller treats as reuse.
+async fn walk_grace_chain(
+    transaction: &mut Transaction<'_, Postgres>,
+    services: &AuthServices,
+    presented_raw: &str,
+    presented: &RefreshContext,
+) -> Result<Option<String>, ApiError> {
+    let mut current_raw = presented_raw.to_owned();
+    let mut current_counter = presented.token.rotation_counter;
+    let mut current_successor = presented.token.replaced_by_hash.clone();
+
+    // The chain is acyclic: every step increments the counter, and a step is
+    // accepted only when the HMAC-derived token hashes to the stored pointer.
+    // A cycle would require an HMAC collision, so the walk terminates at the
+    // family's current (unused) token.
+    loop {
+        let Some(expected) = current_successor.as_deref() else {
+            return Ok(None);
+        };
+        let counter = current_counter + 1;
+        let Some(next_raw) = derive_matching_successor(services, &current_raw, counter, expected)
+        else {
+            return Ok(None);
+        };
+        let next_hash = hash_refresh_token(&next_raw);
+        let Some(next) = find_refresh_token(transaction, &next_hash)
+            .await
+            .map_err(dependency_unavailable)?
+        else {
+            return Ok(None);
+        };
+        if next.session_id != presented.token.session_id
+            || next.rotation_counter != counter
+            || next.revoked_at.is_some()
+        {
+            return Ok(None);
+        }
+        if next.used_at.is_none() {
+            return Ok(Some(next_raw));
+        }
+        current_raw = next_raw;
+        current_counter = next.rotation_counter;
+        current_successor = next.replaced_by_hash;
+    }
+}
+
+/// Recompute a successor with the current derivation key, then the previous
+/// key during a key rotation window, and accept it only when its SHA-256
+/// matches the stored `replaced_by_hash`.
+fn derive_matching_successor(
+    services: &AuthServices,
+    previous_raw: &str,
+    counter: i64,
+    expected: &[u8],
+) -> Option<String> {
+    services
+        .refresh_derivation
+        .candidates()
+        .map(|key| derive_refresh_token(key, previous_raw, counter))
+        .find(|candidate| hash_refresh_token(candidate).as_slice() == expected)
+}
+
+/// Revoke the whole token family and the session, write the critical audit
+/// event and clear the browser cookie. `token_version` is deliberately left
+/// unchanged: the blast radius is this session only (spec §5.2).
+async fn reject_refresh_reuse(
+    transaction: &mut Transaction<'_, Postgres>,
+    services: &AuthServices,
+    context: &RefreshContext,
+    request_id: Uuid,
+    user_agent: Option<String>,
+) -> Result<ApiError, ApiError> {
+    revoke_refresh_family(
+        transaction,
+        context.token.session_id,
+        REVOKE_REASON_TOKEN_REUSE,
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+    revoke_session(
+        transaction,
+        context.token.session_id,
+        REVOKE_REASON_TOKEN_REUSE,
+    )
+    .await
+    .map_err(dependency_unavailable)?;
+
+    let event = with_user_agent(
+        AuditEvent::builder(
+            AuditAction::AuthnRefreshReuseDetected,
+            AuditResult::Failure,
+            AuditActor::user(context.user_id, context.username.clone()),
+            request_id,
+        )
+        .target(TargetType::Session, Some(context.token.session_id), None)
+        .detail("session_id", context.token.session_id.to_string())
+        .detail("rotation_counter", context.token.rotation_counter)
+        .detail("family_revoked", true),
+        user_agent,
+    )
+    .build()
+    .map_err(audit_event_invalid)?;
+    services
+        .audit
+        .write_in_tx(transaction, &event)
+        .await
+        .map_err(audit_unavailable)?;
+
+    let mut error = ApiError::new(ErrorCode::RefreshReuseDetected);
+    error = error.with_header(SET_COOKIE, clear_refresh_cookie());
+    Ok(error)
+}
+
+/// Sign a fresh access token for the same session and attach the rotated
+/// refresh cookie. The response never contains the user or the raw token in
+/// JSON.
+fn refresh_response(
+    services: &AuthServices,
+    context: &RefreshContext,
+    raw_refresh: &str,
+    now: DateTime<Utc>,
+) -> Result<Response, ApiError> {
+    let (access_token, _claims) = services
+        .jwt
+        .sign_access_token(
+            context.user_id,
+            context.token.session_id,
+            context.token_version,
+            context.authenticated_at.timestamp(),
+            Utc::now().timestamp(),
+        )
+        .map_err(|error| internal_error("access token signing failed", error))?;
+
+    let max_age = (context.absolute_expires_at - now)
+        .num_seconds()
+        .clamp(0, REFRESH_COOKIE_MAX_AGE_SECONDS);
+
+    Ok((
+        StatusCode::OK,
+        [(
+            SET_COOKIE,
+            refresh_cookie_with_max_age(raw_refresh, max_age),
+        )],
+        Json(RefreshResponse {
+            access_token,
+            token_type: TOKEN_TYPE.to_owned(),
+            expires_in: JWT_ACCESS_TOKEN_TTL_SECONDS,
+        }),
+    )
+        .into_response())
 }
 
 /// Verify a login or reauthentication password. Unknown identifiers and
@@ -992,11 +1379,35 @@ fn with_user_agent(builder: AuditEventBuilder, user_agent: Option<String>) -> Au
 }
 
 fn refresh_cookie(raw_token: &str) -> HeaderValue {
+    refresh_cookie_with_max_age(raw_token, REFRESH_COOKIE_MAX_AGE_SECONDS)
+}
+
+/// Refresh cookie with a lifetime capped by the session's absolute expiry
+/// (spec §5.2).
+fn refresh_cookie_with_max_age(raw_token: &str, max_age: i64) -> HeaderValue {
     let value = format!(
         "{REFRESH_COOKIE_NAME}={raw_token}; Path=/; Secure; HttpOnly; SameSite=Strict; \
-         Max-Age={REFRESH_COOKIE_MAX_AGE_SECONDS}"
+         Max-Age={max_age}"
     );
     HeaderValue::from_str(&value).expect("refresh tokens are header-safe")
+}
+
+fn clear_refresh_cookie() -> HeaderValue {
+    refresh_cookie_with_max_age("", 0)
+}
+
+/// Read the `__Host-refresh` value from the request's cookie header. Other
+/// cookies are ignored.
+fn refresh_token_from_cookie(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(name, _)| *name == REFRESH_COOKIE_NAME)
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
 }
 
 fn dependency_unavailable(error: impl std::fmt::Display) -> ApiError {

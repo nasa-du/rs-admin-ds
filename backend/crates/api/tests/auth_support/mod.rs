@@ -194,6 +194,20 @@ pub fn json_request(method: &str, uri: &str, body: &serde_json::Value) -> Reques
         .expect("request")
 }
 
+/// `POST /auth/refresh` with the raw token carried in the cookie header. The
+/// access token is intentionally absent: refresh authenticates by cookie only.
+pub fn refresh_request(raw: Option<&str>) -> Request<Body> {
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/refresh")
+        .header(header::CONTENT_TYPE, "application/json");
+    let builder = match raw {
+        Some(raw) => builder.header(header::COOKIE, format!("__Host-refresh={raw}")),
+        None => builder,
+    };
+    builder.body(Body::from("{}")).expect("refresh request")
+}
+
 pub fn authorized_request(
     method: &str,
     uri: &str,
@@ -225,6 +239,11 @@ pub async fn send(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap
 
 pub fn json(body: &[u8]) -> serde_json::Value {
     serde_json::from_slice(body).expect("json body")
+}
+
+/// Stable problem `code` from a problem-details body.
+pub fn problem_code(body: &serde_json::Value) -> &str {
+    body["code"].as_str().expect("problem code")
 }
 
 pub async fn login(

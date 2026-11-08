@@ -24,6 +24,13 @@ pub struct RotationKeys {
     pub previous: Option<HmacKey>,
 }
 
+impl RotationKeys {
+    /// Keys that may have produced an existing derivation, current first.
+    pub fn candidates(&self) -> impl Iterator<Item = &HmacKey> {
+        std::iter::once(&self.current).chain(self.previous.as_ref())
+    }
+}
+
 /// Audit chain signing key ring.
 #[derive(Clone, Debug)]
 pub struct AuditChainConfig {

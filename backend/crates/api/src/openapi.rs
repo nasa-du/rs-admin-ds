@@ -5,12 +5,12 @@
 //! TypeScript client from the committed file.
 
 use crate::auth::{
-    LoginRequest, LoginResponse, ReauthenticateRequest, ReauthenticateResponse, RoleRefResponse,
-    UserSelfResponse,
+    LoginRequest, LoginResponse, ReauthenticateRequest, ReauthenticateResponse, RefreshRequest,
+    RefreshResponse, RoleRefResponse, UserSelfResponse,
 };
 use crate::error::{ErrorCodeSchema, FieldError, ProblemDetails};
 use crate::router::{HealthState, HealthStatus, openapi_router};
-use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 #[derive(OpenApi)]
@@ -37,6 +37,8 @@ use utoipa::{Modify, OpenApi};
         LoginResponse,
         ReauthenticateRequest,
         ReauthenticateResponse,
+        RefreshRequest,
+        RefreshResponse,
         RoleRefResponse,
         UserSelfResponse,
     )),
@@ -44,8 +46,8 @@ use utoipa::{Modify, OpenApi};
 )]
 struct ApiDoc;
 
-/// Declares the Bearer JWT scheme used by `/auth/me` and
-/// `/auth/reauthenticate`.
+/// Declares the Bearer JWT scheme used by protected endpoints and the
+/// documentation-only cookie scheme used by `/auth/refresh`.
 struct SecurityAddon;
 
 impl Modify for SecurityAddon {
@@ -56,6 +58,10 @@ impl Modify for SecurityAddon {
         let mut scheme = Http::new(HttpAuthScheme::Bearer);
         scheme.bearer_format = Some("JWT".to_owned());
         components.add_security_scheme("bearerAuth", SecurityScheme::Http(scheme));
+        components.add_security_scheme(
+            "refreshCookie",
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::new("__Host-refresh"))),
+        );
     }
 }
 

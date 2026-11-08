@@ -8,7 +8,8 @@ use chrono::{Duration, Utc};
 use rs_admin_store::auth::{
     AuthStoreError, NewRefreshToken, NewSession, create_session, find_user_by_email,
     find_user_by_username, insert_refresh_token, load_active_session, load_role_grants,
-    lock_user_for_login, record_login_failure, reset_login_failures, update_successful_login,
+    lock_refresh_context, lock_user_for_login, mark_refresh_token_rotated, record_login_failure,
+    reset_login_failures, update_successful_login,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -318,4 +319,86 @@ async fn role_grants_group_permissions_per_role(pool: PgPool) {
     assert_eq!(grants[0].name, "user");
     assert!(grants[0].is_builtin);
     assert!(grants[0].permission_keys.is_empty());
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_waiting_refresh_observes_a_rotation_committed_while_it_waited(pool: PgPool) {
+    let user_id = insert_user(&pool, "alice", "alice@example.com").await;
+    let now = Utc::now();
+
+    let mut transaction = pool.begin().await.expect("begin");
+    let session_id = create_session(
+        &mut transaction,
+        NewSession {
+            user_id,
+            idle_expires_at: now + Duration::minutes(30),
+            absolute_expires_at: now + Duration::hours(12),
+            authenticated_at: now,
+            ip: None,
+            user_agent: None,
+        },
+    )
+    .await
+    .expect("session");
+    let original_hash = [7u8; 32];
+    insert_refresh_token(
+        &mut transaction,
+        NewRefreshToken {
+            token_hash: &original_hash,
+            session_id,
+            rotation_counter: 0,
+            expires_at: now + Duration::hours(12),
+        },
+    )
+    .await
+    .expect("token");
+    transaction.commit().await.expect("commit");
+
+    // The first refresh holds the session lock while it rotates.
+    let mut first = pool.begin().await.expect("first transaction");
+    let context = lock_refresh_context(&mut first, &original_hash)
+        .await
+        .expect("lock")
+        .expect("context");
+    assert!(context.token.used_at.is_none());
+
+    // A second refresh starts and blocks on the same session lock.
+    let waiting_pool = pool.clone();
+    let waiter = tokio::spawn(async move {
+        let mut second = waiting_pool.begin().await.expect("second transaction");
+        let context = lock_refresh_context(&mut second, &original_hash)
+            .await
+            .expect("waiting lock")
+            .expect("context");
+        second.rollback().await.expect("rollback");
+        context
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let successor_hash = [8u8; 32];
+    mark_refresh_token_rotated(&mut first, &original_hash, &successor_hash, now)
+        .await
+        .expect("rotate");
+    insert_refresh_token(
+        &mut first,
+        NewRefreshToken {
+            token_hash: &successor_hash,
+            session_id,
+            rotation_counter: 1,
+            expires_at: now + Duration::hours(12),
+        },
+    )
+    .await
+    .expect("successor");
+    first.commit().await.expect("commit rotation");
+
+    let waiting = waiter.await.expect("waiter task");
+    assert!(
+        waiting.token.used_at.is_some(),
+        "the waiter must observe the committed rotation instead of a stale snapshot"
+    );
+    assert_eq!(
+        waiting.token.replaced_by_hash.as_deref(),
+        Some(successor_hash.as_slice())
+    );
 }

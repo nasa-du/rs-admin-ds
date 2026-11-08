@@ -1,7 +1,8 @@
 //! Refresh-token and throttle-key helpers (docs/specs/login-system.md §5.2, §8.3).
 
 use rs_admin_security::{
-    HmacKey, REFRESH_TOKEN_BYTES, generate_refresh_token, hash_refresh_token, identifier_hmac_hex,
+    HmacKey, REFRESH_TOKEN_BYTES, derive_refresh_token, generate_refresh_token, hash_refresh_token,
+    identifier_hmac_hex,
 };
 use std::collections::HashSet;
 
@@ -33,6 +34,35 @@ fn refresh_tokens_are_hashed_with_sha256() {
     assert_ne!(first, hash_refresh_token("another token"));
     // The raw token must not appear in its hash.
     assert!(!String::from_utf8_lossy(&first).contains(&token));
+}
+
+#[test]
+fn refresh_derivation_is_a_stable_keyed_chain() {
+    let key = HmacKey::from_bytes(vec![1u8; 32]).expect("key");
+    let other_key = HmacKey::from_bytes(vec![2u8; 32]).expect("key");
+
+    let first = derive_refresh_token(&key, "initial-token", 1);
+    assert_eq!(
+        first,
+        derive_refresh_token(&key, "initial-token", 1),
+        "derivation must be deterministic for a retry"
+    );
+    assert_eq!(first.len(), 43, "HMAC-SHA256 base64url is 43 characters");
+    assert!(
+        first
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')),
+        "derived tokens must be URL-safe: {first}"
+    );
+
+    assert_ne!(first, derive_refresh_token(&key, "initial-token", 2));
+    assert_ne!(first, derive_refresh_token(&key, "other-token", 1));
+    assert_ne!(first, derive_refresh_token(&other_key, "initial-token", 1));
+
+    // A second hop derives from the first successor, not the initial token.
+    let second = derive_refresh_token(&key, &first, 2);
+    assert_ne!(second, first);
+    assert_ne!(second, derive_refresh_token(&key, "initial-token", 2));
 }
 
 #[test]

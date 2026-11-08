@@ -32,6 +32,24 @@ pub fn hash_refresh_token(raw: &str) -> [u8; 32] {
     Sha256::digest(raw.as_bytes()).into()
 }
 
+/// Derive the next raw refresh token in a session's rotation chain
+/// (spec §5.2):
+///
+/// `base64url(HMAC-SHA256(key, previous_raw || ":" || counter))`.
+///
+/// `counter` is the successor's `rotation_counter` (the previous row's
+/// counter plus one). The database only ever stores the SHA-256 of the
+/// result; derivation is deterministic so a grace-window retry can recompute
+/// the same successor.
+pub fn derive_refresh_token(key: &HmacKey, previous_raw: &str, counter: i64) -> String {
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(key.expose()).expect("HMAC accepts keys of any length");
+    mac.update(previous_raw.as_bytes());
+    mac.update(b":");
+    mac.update(counter.to_string().as_bytes());
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
 /// HMAC-SHA256 of a normalized login identifier, used to record unknown
 /// identifiers in audit and throttle state without persisting them.
 pub fn identifier_hmac_hex(key: &HmacKey, identifier: &str) -> String {

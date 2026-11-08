@@ -88,6 +88,42 @@ pub struct NewRefreshToken<'a> {
     pub expires_at: DateTime<Utc>,
 }
 
+/// A refresh-token row as seen while walking a session's rotation chain.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct RefreshTokenRow {
+    pub session_id: Uuid,
+    pub rotation_counter: i64,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub replaced_by_hash: Option<Vec<u8>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// A presented refresh token plus the session and user state needed to decide
+/// whether it may rotate. The session row is locked, serializing every refresh
+/// of one token family across instances.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct RefreshContext {
+    #[sqlx(flatten)]
+    pub token: RefreshTokenRow,
+    pub user_id: Uuid,
+    pub username: String,
+    pub status: String,
+    pub token_version: i64,
+    pub last_seen_at: DateTime<Utc>,
+    pub idle_expires_at: DateTime<Utc>,
+    pub absolute_expires_at: DateTime<Utc>,
+    pub authenticated_at: DateTime<Utc>,
+    pub session_revoked_at: Option<DateTime<Utc>>,
+}
+
+impl RefreshContext {
+    /// Mirrors [`AuthUser::is_active`] for the joined user row.
+    pub fn user_is_active(&self) -> bool {
+        self.status == "active"
+    }
+}
+
 /// Errors from the authentication SQL layer.
 #[derive(thiserror::Error)]
 pub enum AuthStoreError {
@@ -216,6 +252,173 @@ pub async fn insert_refresh_token(
     .bind(token.session_id)
     .bind(token.rotation_counter)
     .bind(token.expires_at)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(())
+}
+
+/// Lock a refresh token together with its session and user for the refresh
+/// transaction. The session row is the lock: every refresh of one token family
+/// serializes on it, so concurrent rotations cannot branch the chain.
+///
+/// The lock is acquired first and the joined state is read in a subsequent
+/// statement. Reading the join while waiting would return the snapshot from
+/// before the wait and miss a rotation that committed in the meantime.
+pub async fn lock_refresh_context(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_hash: &[u8; 32],
+) -> Result<Option<RefreshContext>, AuthStoreError> {
+    let session_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT session_id FROM auth_refresh_tokens WHERE token_hash = $1")
+            .bind(token_hash.as_slice())
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(AuthStoreError::Database)?;
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+
+    let locked: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM auth_sessions WHERE id = $1 FOR UPDATE")
+            .bind(session_id)
+            .fetch_optional(&mut **transaction)
+            .await
+            .map_err(AuthStoreError::Database)?;
+    if locked.is_none() {
+        return Ok(None);
+    }
+
+    sqlx::query_as(
+        "SELECT t.session_id, t.rotation_counter, t.expires_at, t.used_at,
+                t.replaced_by_hash, t.revoked_at,
+                s.user_id, s.last_seen_at, s.idle_expires_at,
+                s.absolute_expires_at, s.authenticated_at,
+                s.revoked_at AS session_revoked_at,
+                u.username, u.status, u.token_version
+         FROM auth_refresh_tokens t
+         JOIN auth_sessions s ON s.id = t.session_id
+         JOIN users u ON u.id = s.user_id
+         WHERE t.token_hash = $1",
+    )
+    .bind(token_hash.as_slice())
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Wall-clock time from the database (`clock_timestamp()`), not the
+/// transaction-start time returned by `now()`. Refresh uses this after winning
+/// the session lock so grace and expiry comparisons describe the moment the
+/// token was actually handled.
+pub async fn database_clock_now(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<DateTime<Utc>, AuthStoreError> {
+    sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(AuthStoreError::Database)
+}
+
+/// Load a refresh-token row by hash while walking the derivation chain. Callers
+/// already hold the session lock from [`lock_refresh_context`].
+pub async fn find_refresh_token(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_hash: &[u8; 32],
+) -> Result<Option<RefreshTokenRow>, AuthStoreError> {
+    sqlx::query_as(
+        "SELECT session_id, rotation_counter, expires_at, used_at,
+                replaced_by_hash, revoked_at
+         FROM auth_refresh_tokens WHERE token_hash = $1",
+    )
+    .bind(token_hash.as_slice())
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Mark a token as rotated and point it at its successor. Returns `false` when
+/// the row was already used or revoked, which means another writer won the
+/// rotation.
+pub async fn mark_refresh_token_rotated(
+    transaction: &mut Transaction<'_, Postgres>,
+    token_hash: &[u8; 32],
+    replaced_by_hash: &[u8; 32],
+    used_at: DateTime<Utc>,
+) -> Result<bool, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_refresh_tokens
+         SET used_at = $2, replaced_by_hash = $3
+         WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL",
+    )
+    .bind(token_hash.as_slice())
+    .bind(used_at)
+    .bind(replaced_by_hash.as_slice())
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Session and token revocation reason when refresh reuse is detected
+/// (spec §5.3).
+pub const REVOKE_REASON_TOKEN_REUSE: &str = "token_reuse";
+
+/// Revoke every token in a session's family with the given reason.
+pub async fn revoke_refresh_family(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    reason: &str,
+) -> Result<u64, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_refresh_tokens
+         SET revoked_at = now(), revoked_reason = $2
+         WHERE session_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected())
+}
+
+/// Revoke a session with an explicit reason. Returns whether this call was the
+/// one that revoked it.
+pub async fn revoke_session(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    reason: &str,
+) -> Result<bool, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_sessions
+         SET revoked_at = now(), revoke_reason = $2
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Stamp a session's activity and slide its idle deadline. Callers apply the
+/// 60-second throttle before invoking this.
+pub async fn touch_session_activity(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    last_seen_at: DateTime<Utc>,
+    idle_expires_at: DateTime<Utc>,
+) -> Result<(), AuthStoreError> {
+    sqlx::query(
+        "UPDATE auth_sessions
+         SET last_seen_at = $2, idle_expires_at = $3
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(last_seen_at)
+    .bind(idle_expires_at)
     .execute(&mut **transaction)
     .await
     .map_err(AuthStoreError::Database)?;

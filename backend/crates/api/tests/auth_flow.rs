@@ -5,7 +5,7 @@ mod auth_support;
 
 use auth_support::{
     AUDIENCE, ISSUER, NewUser, PASSWORD, app, authorized_request, insert_user, json, json_request,
-    login, password_service, refresh_cookie, refresh_token_rows, send, session_count,
+    login, password_service, problem_code, refresh_cookie, refresh_token_rows, send, session_count,
     token_verifier,
 };
 use axum::Router;
@@ -16,10 +16,6 @@ use rs_admin_audit::verify_chain;
 use rs_admin_security::hash_refresh_token;
 use sqlx::PgPool;
 use uuid::Uuid;
-
-fn problem_code(body: &serde_json::Value) -> &str {
-    body["code"].as_str().expect("problem code")
-}
 
 fn without_request_id(mut body: serde_json::Value) -> serde_json::Value {
     body.as_object_mut().expect("object").remove("request_id");

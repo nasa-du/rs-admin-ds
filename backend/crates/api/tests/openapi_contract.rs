@@ -144,6 +144,48 @@ fn auth_operations_are_documented_with_stable_ids_and_bearer_security() {
 }
 
 #[test]
+fn refresh_is_documented_with_a_cookie_scheme_and_stable_operation_id() {
+    let doc = document();
+    let refresh = &doc["paths"]["/api/v1/auth/refresh"]["post"];
+
+    assert_eq!(refresh["operationId"], "refreshToken");
+    assert_eq!(refresh["tags"][0], "Auth");
+    assert_eq!(
+        refresh["security"][0]["refreshCookie"],
+        serde_json::json!([]),
+        "refresh authenticates by cookie"
+    );
+    assert_eq!(
+        refresh["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/RefreshRequest"
+    );
+    assert_eq!(
+        refresh["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/RefreshResponse"
+    );
+    assert!(
+        refresh["responses"]["200"]["headers"]["Set-Cookie"].is_object(),
+        "refresh must document the rotated cookie"
+    );
+    for status in ["401", "403"] {
+        assert_eq!(
+            refresh["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "response {status} must use the problem contract"
+        );
+    }
+    assert!(
+        refresh["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+        "401 must document the Bearer challenge"
+    );
+
+    let scheme = &doc["components"]["securitySchemes"]["refreshCookie"];
+    assert_eq!(scheme["type"], "apiKey");
+    assert_eq!(scheme["in"], "cookie");
+    assert_eq!(scheme["name"], "__Host-refresh");
+}
+
+#[test]
 fn problem_details_and_the_closed_error_catalog_are_in_the_schema() {
     let doc = document();
     let schemas = &doc["components"]["schemas"];

@@ -18,8 +18,8 @@ pub use password::{
     PasswordService, PolicyViolation, VerifyOutcome, exceeds_authentication_limit,
 };
 pub use token::{
-    REFRESH_TOKEN_BYTES, TokenError, generate_refresh_token, hash_refresh_token,
-    identifier_hmac_hex,
+    REFRESH_TOKEN_BYTES, TokenError, derive_refresh_token, generate_refresh_token,
+    hash_refresh_token, identifier_hmac_hex,
 };
 
 use base64::Engine;

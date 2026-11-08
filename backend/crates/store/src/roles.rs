@@ -8,7 +8,7 @@
 //! business change commit or roll back together.
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder, Transaction};
 use std::fmt;
 use uuid::Uuid;
 
@@ -214,6 +214,41 @@ pub async fn find_role_in(
     sqlx::query_as::<_, RoleRow>(ROLE_SELECT_BY_ID)
         .bind(id)
         .fetch_optional(&mut *connection)
+        .await
+        .map_err(RoleStoreError::Database)
+}
+
+/// Load active roles by id, preserving no particular order. Used to validate
+/// a user role assignment.
+pub async fn find_roles_by_ids<'e, E>(
+    executor: E,
+    ids: &[Uuid],
+) -> Result<Vec<RoleRow>, RoleStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, RoleRow>(concat!(role_select!(), " AND r.id = ANY($1)"))
+        .bind(ids)
+        .fetch_all(executor)
+        .await
+        .map_err(RoleStoreError::Database)
+}
+
+/// Same as [`find_roles_by_ids`] with `FOR SHARE`, so a concurrent soft delete
+/// cannot remove a role between validation and assignment.
+pub async fn lock_roles_by_ids(
+    transaction: &mut Transaction<'_, Postgres>,
+    ids: &[Uuid],
+) -> Result<Vec<RoleRow>, RoleStoreError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, RoleRow>(concat!(role_select!(), " AND r.id = ANY($1) FOR SHARE"))
+        .bind(ids)
+        .fetch_all(&mut **transaction)
         .await
         .map_err(RoleStoreError::Database)
 }

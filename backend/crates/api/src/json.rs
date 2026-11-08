@@ -12,6 +12,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use rs_admin_domain::ErrorCode;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::error::Category;
 
@@ -68,6 +69,14 @@ fn json_error(error: serde_json::Error) -> ApiError {
             if quoted_field(&message, "unknown field").is_some() {
                 return ApiError::new(ErrorCode::UnknownField);
             }
+            if let Some(rest) = message.strip_prefix("field_value:") {
+                let pointer = rest.split(" at line").next().unwrap_or(rest).trim();
+                return ApiError::new(ErrorCode::ValidationFailed).with_errors(vec![FieldError {
+                    pointer: pointer.to_owned(),
+                    code: "invalid".to_owned(),
+                    params: None,
+                }]);
+            }
             if let Some(field) = quoted_field(&message, "missing field") {
                 return ApiError::new(ErrorCode::ValidationFailed).with_errors(vec![FieldError {
                     pointer: format!("/{field}"),
@@ -88,4 +97,35 @@ fn quoted_field<'a>(message: &'a str, prefix: &str) -> Option<&'a str> {
         .split('`')
         .nth(1)
         .filter(|field| !field.is_empty())
+}
+
+/// Generate a deserializer for an optional, non-nullable string field. An
+/// explicit `null` (or a non-string value) is a field validation error rather
+/// than "unchanged"; the JSON Pointer rides in the serde message because a
+/// custom deserializer has no access to the field name.
+macro_rules! non_null_option {
+    ($function:ident, $pointer:literal) => {
+        pub(crate) fn $function<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            String::deserialize(deserializer)
+                .map(Some)
+                .map_err(|_| serde::de::Error::custom(concat!("field_value:", $pointer)))
+        }
+    };
+}
+
+non_null_option!(non_null_display_name, "/display_name");
+non_null_option!(non_null_username, "/username");
+non_null_option!(non_null_email, "/email");
+non_null_option!(non_null_role_name, "/name");
+
+/// Deserialize an optional nullable field, keeping an explicit `null`
+/// distinguishable from an omitted field.
+pub(crate) fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }

@@ -5,6 +5,7 @@
 //! details where applicable, and the API security headers.
 
 mod auth;
+mod authz;
 mod browser;
 mod client_ip;
 mod error;
@@ -13,8 +14,11 @@ mod logging;
 mod metrics;
 mod middleware;
 mod openapi;
+mod query;
 mod roles;
 mod router;
+mod users;
+mod wire;
 
 pub use auth::{AuthServiceError, AuthServices};
 pub use error::{ApiError, FieldError, ProblemDetails};

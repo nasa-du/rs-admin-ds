@@ -145,6 +145,8 @@ pub async fn app_with(pool: &PgPool, settings: AuthSettings, proxies: TrustedPro
 pub struct NewUser<'a> {
     pub username: &'a str,
     pub email: &'a str,
+    /// Defaults to the username when absent.
+    pub display_name: Option<&'a str>,
     pub password: &'a str,
     pub status: &'a str,
     pub must_change_password: bool,
@@ -159,6 +161,7 @@ impl<'a> NewUser<'a> {
         Self {
             username,
             email,
+            display_name: None,
             password: PASSWORD,
             status: "active",
             must_change_password: false,
@@ -186,11 +189,12 @@ pub async fn insert_user(pool: &PgPool, user: NewUser<'_>) -> Uuid {
         "INSERT INTO users (
             username, email, display_name, password_hash, status,
             must_change_password, temporary_password_expires_at
-         ) VALUES ($1, $2, $1, $3, $4, $5, $6)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id",
     )
     .bind(user.username)
     .bind(user.email)
+    .bind(user.display_name.unwrap_or(user.username))
     .bind(hash)
     .bind(user.status)
     .bind(user.must_change_password)

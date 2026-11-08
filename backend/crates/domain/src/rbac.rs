@@ -87,6 +87,9 @@ pub enum RoleTarget<'a> {
     BuiltIn(BuiltInRole),
     /// A custom role and its permission keys.
     Custom(&'a [PermissionKey]),
+    /// A persisted role or permission key the current catalog cannot resolve.
+    /// It grants nothing, but scope decisions fail closed.
+    Unresolved,
 }
 
 /// The union of a principal's role permissions, plus the super-admin bypass.
@@ -160,6 +163,7 @@ impl EffectivePermissions {
             RoleTarget::BuiltIn(BuiltInRole::User) => true,
             RoleTarget::BuiltIn(_) => self.is_super_admin,
             RoleTarget::Custom(keys) => self.can_grant_keys(keys.iter().copied()),
+            RoleTarget::Unresolved => false,
         }
     }
 
@@ -170,7 +174,29 @@ impl EffectivePermissions {
         match target {
             RoleTarget::BuiltIn(_) => false,
             RoleTarget::Custom(keys) => self.can_grant_keys(keys.iter().copied()),
+            RoleTarget::Unresolved => false,
         }
+    }
+
+    /// Management scope over another user (spec §6.3 rule 4).
+    ///
+    /// A non-super-admin may read and manage only users whose permissions do
+    /// not exceed their own and who hold neither the built-in `admin` nor
+    /// `super_admin` role. Unresolvable catalog entries fail closed. The
+    /// caller applies the "self is always visible" exception; the operator
+    /// themselves is subject to this rule like any other target.
+    pub fn can_manage_user<'a>(&self, roles: impl IntoIterator<Item = RoleTarget<'a>>) -> bool {
+        if self.is_super_admin {
+            return true;
+        }
+        roles.into_iter().all(|role| match role {
+            RoleTarget::BuiltIn(BuiltInRole::Admin | BuiltInRole::SuperAdmin) => false,
+            RoleTarget::BuiltIn(builtin) => {
+                self.can_grant_keys(builtin.permission_keys().iter().copied())
+            }
+            RoleTarget::Custom(keys) => self.can_grant_keys(keys.iter().copied()),
+            RoleTarget::Unresolved => false,
+        })
     }
 }
 

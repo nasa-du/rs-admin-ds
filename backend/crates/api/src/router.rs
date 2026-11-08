@@ -121,11 +121,17 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(crate::roles::set_role_permissions))
         .routes(routes!(crate::roles::list_permissions));
 
+    let users = OpenApiRouter::new()
+        .routes(routes!(crate::users::list_users))
+        .routes(routes!(crate::users::create_user))
+        .routes(routes!(crate::users::get_user, crate::users::update_user));
+
     OpenApiRouter::new()
         .routes(routes!(health_live))
         .routes(routes!(health_ready))
         .merge(auth)
         .merge(roles)
+        .merge(users)
 }
 
 /// Build the production router.

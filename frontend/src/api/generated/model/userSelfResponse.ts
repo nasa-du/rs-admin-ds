@@ -5,7 +5,7 @@
  * API for the rs-admin login and permission system. Health probes are served at the root; business endpoints are served under `/api/v1`.
  * OpenAPI spec version: 0.1.0
  */
-import type { RoleRefResponse } from './roleRefResponse'
+import type { RoleRef } from './roleRef'
 
 /**
  * The current user's profile, roles and effective permissions.
@@ -19,7 +19,7 @@ export interface UserSelfResponse {
   permissions: string[]
   /** @nullable */
   phone?: string | null
-  roles: RoleRefResponse[]
+  roles: RoleRef[]
   status: string
   /** @nullable */
   temporary_password_expires_at?: string | null

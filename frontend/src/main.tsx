@@ -9,6 +9,7 @@ import {
   onPasswordChangeRequired,
 } from '@/features/auth/auth-interruptions'
 import { authSession } from '@/features/auth/auth-session'
+import { ReauthProvider } from '@/features/auth/reauth/reauth-dialog'
 import { handleRemoteSignOut } from '@/features/auth/sign-out'
 import { LocaleProvider } from './components/locale-provider'
 import { DirectionProvider } from './context/direction-provider'
@@ -96,7 +97,9 @@ if (!rootElement.innerHTML) {
           <FontProvider>
             <DirectionProvider>
               <LocaleProvider>
-                <RouterProvider router={router} />
+                <ReauthProvider>
+                  <RouterProvider router={router} />
+                </ReauthProvider>
               </LocaleProvider>
             </DirectionProvider>
           </FontProvider>

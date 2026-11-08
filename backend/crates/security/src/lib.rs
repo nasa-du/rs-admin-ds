@@ -23,8 +23,8 @@ pub use throttle::{
     identifier_throttle_key, ip_throttle_key, normalize_ip,
 };
 pub use token::{
-    REFRESH_TOKEN_BYTES, TokenError, derive_refresh_token, generate_refresh_token,
-    hash_refresh_token, identifier_hmac_hex,
+    REFRESH_TOKEN_BYTES, TEMPORARY_PASSWORD_BYTES, TokenError, derive_refresh_token,
+    generate_refresh_token, generate_temporary_password, hash_refresh_token, identifier_hmac_hex,
 };
 
 use base64::Engine;

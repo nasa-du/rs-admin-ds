@@ -13,6 +13,10 @@ use sha2::{Digest, Sha256};
 /// Entropy of an initial refresh token.
 pub const REFRESH_TOKEN_BYTES: usize = 32;
 
+/// Entropy behind an administrator-issued temporary password. 18 bytes encode
+/// to exactly 24 base64url characters (spec §7.7, ADR-0003 §3).
+pub const TEMPORARY_PASSWORD_BYTES: usize = 18;
+
 /// Errors from token generation. The message never includes key material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TokenError {
@@ -23,6 +27,14 @@ pub enum TokenError {
 /// Generate an initial refresh token from the operating system CSPRNG.
 pub fn generate_refresh_token() -> Result<String, TokenError> {
     let mut bytes = [0u8; REFRESH_TOKEN_BYTES];
+    getrandom::fill(&mut bytes).map_err(|_| TokenError::Random)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Generate an administrator-issued temporary password: 24 base64url
+/// characters (about 144 bits) from the operating system CSPRNG.
+pub fn generate_temporary_password() -> Result<String, TokenError> {
+    let mut bytes = [0u8; TEMPORARY_PASSWORD_BYTES];
     getrandom::fill(&mut bytes).map_err(|_| TokenError::Random)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }

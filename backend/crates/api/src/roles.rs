@@ -7,61 +7,41 @@
 //! password authentication (reauthentication) and append one audit event per change in
 //! the same transaction as the change itself.
 
-use crate::auth::{
-    AuthServices, Authenticated, SessionPrincipal, audit_event_invalid, audit_unavailable,
-    user_agent, with_user_agent, write_audit_event,
+use crate::auth::{AuthServices, Authenticated, SessionPrincipal, write_audit_event};
+use crate::authz::{
+    Denial, DenialTarget, RequestContext, require_permission, require_recent_auth, write_denial,
 };
 use crate::client_ip::ClientIp;
 use crate::error::{ApiError, FieldError};
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
+use crate::query::{parse_id, parse_pagination, validation_error};
 use crate::router::AppState;
+use crate::wire::format_timestamp;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, SecondsFormat, Utc};
 use rs_admin_audit::{AuditAction, AuditActor, AuditEvent, AuditResult, TargetType};
 use rs_admin_domain::ErrorCode;
 use rs_admin_domain::permission::{
     PERMISSION_CATALOG, PermissionGroup as CatalogGroup, PermissionKey,
 };
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleTarget};
-use rs_admin_store::auth::pool_clock_now;
 use rs_admin_store::roles::{
     RoleFilter, RoleRow, RoleSort, RoleSortField, count_assignments, find_role, find_role_in,
     insert_role, list_roles as store_list_roles, lock_role, replace_permissions, soft_delete_role,
     update_role,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::net::IpAddr;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-const DEFAULT_PAGE_SIZE: i64 = 20;
-const MAX_PAGE_SIZE: i64 = 200;
 const MAX_ROLE_NAME_CHARS: usize = 64;
 const MAX_DESCRIPTION_CHARS: usize = 500;
-
-/// Per-request values needed to write authorization audit events.
-struct RequestContext {
-    request_id: Uuid,
-    client_ip: IpAddr,
-    user_agent: Option<String>,
-}
-
-impl RequestContext {
-    fn new(request_id: Uuid, headers: &HeaderMap, client_ip: IpAddr) -> Self {
-        Self {
-            request_id,
-            client_ip,
-            user_agent: user_agent(headers),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Request and response types
@@ -181,10 +161,10 @@ pub struct CreateRoleRequest {
 pub struct UpdateRoleRequest {
     /// Omitted means unchanged; `null` is rejected because names are not
     /// nullable.
-    #[serde(default, deserialize_with = "non_null_option")]
+    #[serde(default, deserialize_with = "crate::json::non_null_role_name")]
     #[schema(nullable = false)]
     pub name: Option<String>,
-    #[serde(default, deserialize_with = "double_option")]
+    #[serde(default, deserialize_with = "crate::json::double_option")]
     pub description: Option<Option<String>>,
 }
 
@@ -195,43 +175,13 @@ pub struct SetRolePermissionsRequest {
     pub permission_keys: Vec<String>,
 }
 
-fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
-}
-
-fn non_null_option<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    String::deserialize(deserializer).map(Some)
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn format_timestamp(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn validation_error(pointer: &str, code: &str) -> ApiError {
-    ApiError::new(ErrorCode::ValidationFailed).with_errors(vec![FieldError {
-        pointer: pointer.to_owned(),
-        code: code.to_owned(),
-        params: None,
-    }])
-}
-
 fn role_store_unavailable(error: impl std::fmt::Display) -> ApiError {
     tracing::warn!(error = %error, "role store operation failed");
     ApiError::service_unavailable()
-}
-
-fn parse_role_id(raw: &str) -> Result<Uuid, ApiError> {
-    Uuid::parse_str(raw).map_err(|_| ApiError::new(ErrorCode::NotFound))
 }
 
 fn known_permission_keys(row: &RoleRow) -> Vec<PermissionKey> {
@@ -250,6 +200,18 @@ fn role_within_permissions(row: &RoleRow, effective: &EffectivePermissions) -> b
     }
     let known = known_permission_keys(row);
     row.permission_keys.len() == known.len() && effective.can_grant_keys(known)
+}
+
+/// Whether the operator may grant this role to a user (spec §6.4). Built-in
+/// names outside the code catalog and custom roles with unresolved permission
+/// keys are conservatively ineligible.
+pub(crate) fn role_is_assignable(row: &RoleRow, effective: &EffectivePermissions) -> bool {
+    if row.is_builtin {
+        BuiltInRole::from_code(&row.name)
+            .is_some_and(|builtin| effective.can_assign(RoleTarget::BuiltIn(builtin)))
+    } else {
+        role_within_permissions(row, effective)
+    }
 }
 
 /// Eligibility of one role for the current operator (spec §6.4). Built-in
@@ -285,14 +247,16 @@ fn detail_role(row: &RoleRow, effective: &EffectivePermissions) -> RoleDetail {
     summarize_role(row, effective).into()
 }
 
-fn role_target(row: &RoleRow) -> (Uuid, Option<&str>) {
-    (row.id, Some(row.name.as_str()))
+fn role_target(row: &RoleRow) -> DenialTarget<'_> {
+    DenialTarget::role(row.id, Some(row.name.as_str()))
 }
 
 /// Audit target for a role addressed by path, even before it is loaded: the
 /// id is known, the name snapshot is not.
-fn requested_role_target(raw: &str) -> Option<(Uuid, Option<&'static str>)> {
-    Uuid::parse_str(raw).ok().map(|id| (id, None))
+fn requested_role_target(raw: &str) -> Option<DenialTarget<'static>> {
+    Uuid::parse_str(raw)
+        .ok()
+        .map(|id| DenialTarget::role(id, None))
 }
 
 fn normalize_role_name(raw: &str) -> Result<String, ApiError> {
@@ -351,32 +315,7 @@ struct ListParams {
 }
 
 fn parse_list_query(query: ListRolesQuery) -> Result<ListParams, ApiError> {
-    let page = match query.page.as_deref().map(str::trim) {
-        None | Some("") => 1,
-        Some(raw) => raw
-            .parse::<i64>()
-            .ok()
-            .filter(|page| *page >= 1)
-            .ok_or_else(|| validation_error("/page", "invalid"))?,
-    };
-    let page_size = match query.page_size.as_deref().map(str::trim) {
-        None | Some("") => DEFAULT_PAGE_SIZE,
-        Some(raw) => {
-            let size = raw
-                .parse::<i64>()
-                .ok()
-                .filter(|size| *size >= 1)
-                .ok_or_else(|| validation_error("/page_size", "invalid"))?;
-            if size > MAX_PAGE_SIZE {
-                return Err(ApiError::new(ErrorCode::PageSizeTooLarge));
-            }
-            size
-        }
-    };
-    // Reject offsets that cannot be represented rather than overflowing.
-    page.checked_sub(1)
-        .and_then(|page| page.checked_mul(page_size))
-        .ok_or_else(|| validation_error("/page", "invalid"))?;
+    let (page, page_size) = parse_pagination(query.page.as_deref(), query.page_size.as_deref())?;
 
     let is_builtin = match query.is_builtin.as_deref().map(str::trim) {
         None | Some("") => None,
@@ -422,112 +361,6 @@ fn parse_sort(raw: Option<&str>) -> Result<RoleSort, ApiError> {
     Ok(RoleSort { field, ascending })
 }
 
-// ---------------------------------------------------------------------------
-// Authorization, reauthentication and denial auditing
-// ---------------------------------------------------------------------------
-
-/// A refusal to record in the audit chain.
-struct Denial<'a> {
-    action: AuditAction,
-    operation: &'static str,
-    reason: ErrorCode,
-    target: Option<(Uuid, Option<&'a str>)>,
-    max_age_seconds: Option<i64>,
-}
-
-impl<'a> Denial<'a> {
-    fn authorization(
-        operation: &'static str,
-        reason: ErrorCode,
-        target: Option<(Uuid, Option<&'a str>)>,
-    ) -> Self {
-        Self {
-            action: AuditAction::AuthzDenied,
-            operation,
-            reason,
-            target,
-            max_age_seconds: None,
-        }
-    }
-
-    fn reauth(
-        operation: &'static str,
-        target: Option<(Uuid, Option<&'a str>)>,
-        max_age_seconds: i64,
-    ) -> Self {
-        Self {
-            action: AuditAction::AuthzStepUpDenied,
-            operation,
-            reason: ErrorCode::ReauthRequired,
-            target,
-            max_age_seconds: Some(max_age_seconds),
-        }
-    }
-}
-
-/// Write an `authz_denied` or `authz_step_up_denied` event. Deployments where
-/// the audit chain is unavailable fail closed with 503.
-async fn write_denial(
-    state: &AppState,
-    services: &AuthServices,
-    principal: &SessionPrincipal,
-    context: &RequestContext,
-    denial: Denial<'_>,
-) -> Result<(), ApiError> {
-    let mut builder = AuditEvent::builder(
-        denial.action,
-        AuditResult::Denied,
-        AuditActor::user(principal.user.id, principal.user.username.clone()),
-        context.request_id,
-    );
-    builder = match denial.target {
-        Some((id, label)) => builder.target(TargetType::Role, Some(id), label.map(str::to_owned)),
-        None => builder.target(TargetType::System, None, None),
-    };
-    builder = builder
-        .detail("operation", denial.operation)
-        .detail("reason_code", denial.reason.as_str())
-        .ip(context.client_ip);
-    if let Some(max_age_seconds) = denial.max_age_seconds {
-        builder = builder.detail("max_age_seconds", max_age_seconds);
-    }
-
-    let event = with_user_agent(builder, context.user_agent.clone())
-        .build()
-        .map_err(audit_event_invalid)?;
-    services
-        .audit()
-        .write(state.database.pool(), &event)
-        .await
-        .map_err(audit_unavailable)?;
-    Ok(())
-}
-
-/// Permission gate. A missing permission produces 403 `forbidden` and an
-/// `authz_denied` audit event.
-async fn require_permission(
-    state: &AppState,
-    services: &AuthServices,
-    principal: &SessionPrincipal,
-    context: &RequestContext,
-    permission: PermissionKey,
-    operation: &'static str,
-    target: Option<(Uuid, Option<&str>)>,
-) -> Result<(), ApiError> {
-    if principal.effective.contains(permission) {
-        return Ok(());
-    }
-    write_denial(
-        state,
-        services,
-        principal,
-        context,
-        Denial::authorization(operation, ErrorCode::Forbidden, target),
-    )
-    .await?;
-    Err(ApiError::new(ErrorCode::Forbidden))
-}
-
 /// Target-level denial for built-in roles and grant-subset violations.
 async fn deny_role(
     state: &AppState,
@@ -538,53 +371,18 @@ async fn deny_role(
     reason: ErrorCode,
     role: &RoleRow,
 ) -> ApiError {
-    let target = role_target(role);
     if let Err(error) = write_denial(
         state,
         services,
         principal,
         context,
-        Denial::authorization(operation, reason, Some(target)),
+        Denial::authorization(operation, reason, Some(role_target(role))),
     )
     .await
     {
         return error;
     }
     ApiError::new(reason)
-}
-
-/// Reauthentication gate for sensitive writes (spec §5.8). The session's
-/// `authenticated_at` is authoritative.
-async fn require_recent_auth(
-    state: &AppState,
-    services: &AuthServices,
-    principal: &SessionPrincipal,
-    context: &RequestContext,
-    operation: &'static str,
-    target: Option<(Uuid, Option<&str>)>,
-) -> Result<(), ApiError> {
-    let max_age = services.reauth_max_age();
-    let max_age_seconds = i64::try_from(max_age.as_secs()).unwrap_or(i64::MAX);
-    let now = pool_clock_now(state.database.pool())
-        .await
-        .map_err(role_store_unavailable)?;
-    if now.signed_duration_since(principal.session.authenticated_at)
-        <= chrono::Duration::seconds(max_age_seconds)
-    {
-        return Ok(());
-    }
-
-    write_denial(
-        state,
-        services,
-        principal,
-        context,
-        Denial::reauth(operation, target, max_age_seconds),
-    )
-    .await?;
-
-    Err(ApiError::new(ErrorCode::ReauthRequired)
-        .with_details(serde_json::json!({ "max_age": max_age_seconds })))
 }
 
 /// Load an active role or return 404.
@@ -705,7 +503,7 @@ pub async fn list_roles(
 ) -> Result<Json<RoleListResponse>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -799,7 +597,7 @@ pub async fn get_role(
 ) -> Result<Json<RoleDetail>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -812,7 +610,7 @@ pub async fn get_role(
     )
     .await?;
 
-    let id = parse_role_id(&id)?;
+    let id = parse_id(&id)?;
     let role = load_role(&state, id).await?;
     Ok(Json(detail_role(&role, &principal.effective)))
 }
@@ -865,7 +663,7 @@ pub async fn list_permissions(
 ) -> Result<Json<PermissionListResponse>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     let allowed = [
         PermissionKey::RolesRead,
@@ -975,7 +773,7 @@ pub async fn create_role(
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -1138,7 +936,7 @@ pub async fn update_role_metadata(
 ) -> Result<Json<RoleDetail>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -1151,7 +949,7 @@ pub async fn update_role_metadata(
     )
     .await?;
 
-    let id = parse_role_id(&id)?;
+    let id = parse_id(&id)?;
     let role = load_custom_role(&state, services, &principal, &context, id, "update_role").await?;
     ensure_role_within_permissions(&state, services, &principal, &context, "update_role", &role)
         .await?;
@@ -1353,7 +1151,7 @@ pub async fn set_role_permissions(
 ) -> Result<Json<RoleDetail>, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -1366,7 +1164,7 @@ pub async fn set_role_permissions(
     )
     .await?;
 
-    let id = parse_role_id(&id)?;
+    let id = parse_id(&id)?;
     let role = load_custom_role(
         &state,
         services,
@@ -1543,7 +1341,7 @@ pub async fn delete_role(
 ) -> Result<Response, ApiError> {
     let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
     let principal = principal.0;
-    let context = RequestContext::new(request_id.0, &headers, client_ip.0);
+    let context = RequestContext::new(request_id, &headers, client_ip.0);
 
     require_permission(
         &state,
@@ -1556,7 +1354,7 @@ pub async fn delete_role(
     )
     .await?;
 
-    let id = parse_role_id(&id)?;
+    let id = parse_id(&id)?;
     let role = load_custom_role(&state, services, &principal, &context, id, "delete_role").await?;
     ensure_role_within_permissions(&state, services, &principal, &context, "delete_role", &role)
         .await?;

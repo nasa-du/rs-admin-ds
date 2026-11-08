@@ -200,3 +200,46 @@ fn assignable_and_manageable_follow_the_target_eligibility_rules() {
     assert!(!narrow.can_assign(RoleTarget::Custom(&beyond_narrow)));
     assert!(!narrow.can_manage(RoleTarget::Custom(&beyond_narrow)));
 }
+
+#[test]
+fn management_scope_excludes_privileged_and_broader_users() {
+    let admin = EffectivePermissions::from_grants([RoleGrant::BuiltIn(BuiltInRole::Admin)]);
+    let super_admin =
+        EffectivePermissions::from_grants([RoleGrant::BuiltIn(BuiltInRole::SuperAdmin)]);
+    let narrow =
+        EffectivePermissions::from_grants([RoleGrant::Custom(&[PermissionKey::UsersRead])]);
+
+    // Every user holds the baseline role, which grants nothing.
+    assert!(admin.can_manage_user([RoleTarget::BuiltIn(BuiltInRole::User)]));
+    assert!(narrow.can_manage_user([RoleTarget::BuiltIn(BuiltInRole::User)]));
+
+    // Spec §6.3 rule 4: holders of the built-in admin or super_admin role are
+    // outside a non-super-admin's management scope even when their effective
+    // permission set would otherwise be a subset.
+    assert!(!admin.can_manage_user([
+        RoleTarget::BuiltIn(BuiltInRole::User),
+        RoleTarget::BuiltIn(BuiltInRole::Admin),
+    ]));
+    assert!(!admin.can_manage_user([RoleTarget::BuiltIn(BuiltInRole::SuperAdmin)]));
+    assert!(!narrow.can_manage_user([RoleTarget::BuiltIn(BuiltInRole::Admin)]));
+
+    // Custom roles are in scope exactly when their permission set is a subset
+    // of the operator's effective permissions.
+    let within_admin = [PermissionKey::UsersRead, PermissionKey::AuditRead];
+    let beyond_admin = [PermissionKey::RolesCreate];
+    assert!(admin.can_manage_user([RoleTarget::Custom(&within_admin)]));
+    assert!(!admin.can_manage_user([RoleTarget::Custom(&beyond_admin)]));
+    assert!(!narrow.can_manage_user([RoleTarget::Custom(&within_admin)]));
+    assert!(narrow.can_manage_user([RoleTarget::Custom(&[PermissionKey::UsersRead])]));
+
+    // A role or permission key the catalog cannot resolve grants nothing but
+    // fails closed for scope decisions.
+    assert!(!admin.can_manage_user([RoleTarget::Unresolved]));
+
+    // Super administrators are never restricted.
+    assert!(super_admin.can_manage_user([
+        RoleTarget::BuiltIn(BuiltInRole::Admin),
+        RoleTarget::BuiltIn(BuiltInRole::SuperAdmin),
+        RoleTarget::Unresolved,
+    ]));
+}

@@ -6,8 +6,8 @@
 
 use crate::auth::{
     ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutRequest,
-    ReauthenticateRequest, ReauthenticateResponse, RefreshRequest, RefreshResponse,
-    RoleRefResponse, UserSelfResponse,
+    ReauthenticateRequest, ReauthenticateResponse, RefreshRequest, RefreshResponse, RoleRef,
+    UserSelfResponse,
 };
 use crate::error::{ErrorCodeSchema, FieldError, ProblemDetails};
 use crate::roles::{
@@ -15,6 +15,10 @@ use crate::roles::{
     RoleListResponse, RoleSummary, SetRolePermissionsRequest, UpdateRoleRequest,
 };
 use crate::router::{HealthState, HealthStatus, openapi_router};
+use crate::users::{
+    CreateUserRequest, UpdateUserRequest, UserCreatedResponse, UserDetail, UserListResponse,
+    UserSummary,
+};
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
@@ -34,6 +38,7 @@ use utoipa::{Modify, OpenApi};
             name = "Auth",
             description = "Password login, sessions, self-service password change, current user and reauthentication"
         ),
+        (name = "Users", description = "User listing, detail, creation and profile edits"),
         (name = "Roles", description = "Role catalog and custom role management"),
         (name = "Permissions", description = "The code-owned permission catalog")
     ),
@@ -52,7 +57,7 @@ use utoipa::{Modify, OpenApi};
         ReauthenticateResponse,
         RefreshRequest,
         RefreshResponse,
-        RoleRefResponse,
+        RoleRef,
         UserSelfResponse,
         CreateRoleRequest,
         UpdateRoleRequest,
@@ -63,6 +68,12 @@ use utoipa::{Modify, OpenApi};
         PermissionItem,
         PermissionGroup,
         PermissionListResponse,
+        UserSummary,
+        UserDetail,
+        UserListResponse,
+        CreateUserRequest,
+        UpdateUserRequest,
+        UserCreatedResponse,
     )),
     modifiers(&SecurityAddon)
 )]

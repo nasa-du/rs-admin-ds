@@ -7,10 +7,13 @@
  */
 
 /**
- * A role as exposed by `/auth/me` and the login response.
+ * `PATCH /users/{id}` request body. Omitted fields are unchanged; an explicit
+ * `null` phone clears it.
  */
-export interface RoleRefResponse {
-  id: string
-  is_builtin: boolean
-  name: string
+export interface UpdateUserRequest {
+  display_name?: string
+  email?: string
+  /** @nullable */
+  phone?: string | null
+  username?: string
 }

@@ -18,6 +18,7 @@ use crate::error::{ApiError, FieldError};
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
 use crate::router::AppState;
+use crate::wire::format_timestamp;
 use axum::Extension;
 use axum::Json;
 use axum::extract::{FromRequestParts, State};
@@ -25,7 +26,7 @@ use axum::http::header::{AUTHORIZATION, COOKIE, RETRY_AFTER, SET_COOKIE, USER_AG
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rs_admin_audit::{
     AuditAction, AuditActor, AuditEvent, AuditEventBuilder, AuditResult, AuditWriter, TargetType,
 };
@@ -168,6 +169,17 @@ impl AuthServices {
     pub(crate) fn reauth_max_age(&self) -> std::time::Duration {
         self.settings.reauth_max_age
     }
+
+    /// Lifetime of an administrator-issued temporary password (spec §7.7).
+    pub(crate) fn temporary_password_ttl(&self) -> std::time::Duration {
+        self.settings.temp_password_ttl
+    }
+
+    /// The bounded password hashing service, shared by authentication and
+    /// administrator credential issuance.
+    pub(crate) fn passwords(&self) -> &PasswordService {
+        &self.passwords
+    }
 }
 
 /// Startup errors from the authentication services. Messages never contain key
@@ -267,7 +279,7 @@ pub struct LoginRequest {
 
 /// A role as exposed by `/auth/me` and the login response.
 #[derive(Clone, Debug, Serialize, ToSchema)]
-pub struct RoleRefResponse {
+pub struct RoleRef {
     pub id: String,
     pub name: String,
     pub is_builtin: bool,
@@ -282,7 +294,7 @@ pub struct UserSelfResponse {
     pub display_name: String,
     pub phone: Option<String>,
     pub status: String,
-    pub roles: Vec<RoleRefResponse>,
+    pub roles: Vec<RoleRef>,
     pub permissions: Vec<String>,
     pub is_super_admin: bool,
     pub must_change_password: bool,
@@ -2437,7 +2449,7 @@ fn user_self(
         status: user.status.clone(),
         roles: roles
             .iter()
-            .map(|role| RoleRefResponse {
+            .map(|role| RoleRef {
                 id: role.id.to_string(),
                 name: role.name.clone(),
                 is_builtin: role.is_builtin,
@@ -2480,10 +2492,6 @@ fn resolve_effective_permissions(roles: &[UserRole]) -> EffectivePermissions {
             .map(RoleGrant::BuiltIn)
             .chain(custom.iter().map(|keys| RoleGrant::Custom(keys.as_slice()))),
     )
-}
-
-fn format_timestamp(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn normalize_identifier(raw: &str) -> Option<LoginIdentifier> {
@@ -2571,7 +2579,7 @@ pub(crate) fn dependency_unavailable(error: impl std::fmt::Display) -> ApiError 
     ApiError::service_unavailable()
 }
 
-fn password_unavailable(error: PasswordError) -> ApiError {
+pub(crate) fn password_unavailable(error: PasswordError) -> ApiError {
     match error {
         PasswordError::Busy => {
             let mut error = ApiError::service_unavailable();

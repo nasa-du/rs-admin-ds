@@ -1,8 +1,8 @@
 //! Refresh-token and throttle-key helpers (docs/specs/login-system.md §5.2, §8.3).
 
 use rs_admin_security::{
-    HmacKey, REFRESH_TOKEN_BYTES, derive_refresh_token, generate_refresh_token, hash_refresh_token,
-    identifier_hmac_hex,
+    HmacKey, REFRESH_TOKEN_BYTES, derive_refresh_token, generate_refresh_token,
+    generate_temporary_password, hash_refresh_token, identifier_hmac_hex,
 };
 use std::collections::HashSet;
 
@@ -63,6 +63,27 @@ fn refresh_derivation_is_a_stable_keyed_chain() {
     let second = derive_refresh_token(&key, &first, 2);
     assert_ne!(second, first);
     assert_ne!(second, derive_refresh_token(&key, "initial-token", 2));
+}
+
+#[test]
+fn temporary_passwords_are_24_character_url_safe_and_unique() {
+    let mut seen = HashSet::new();
+    for _ in 0..64 {
+        let password = generate_temporary_password().expect("temporary password");
+        assert_eq!(
+            password.chars().count(),
+            24,
+            "spec §7.7 requires 24 base64url characters: {password}"
+        );
+        assert_eq!(password.len(), 24, "base64url is ASCII: {password}");
+        assert!(
+            password.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            ),
+            "temporary password must be URL-safe: {password}"
+        );
+        assert!(seen.insert(password), "temporary passwords must not repeat");
+    }
 }
 
 #[test]

@@ -19,6 +19,7 @@ use crate::users::{
     CreateUserRequest, UpdateUserRequest, UserCreatedResponse, UserDetail, UserListResponse,
     UserSummary,
 };
+use crate::users_lifecycle::{ResetUserPasswordRequest, SetUserRolesRequest, SetUserStatusRequest};
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, Http, HttpAuthScheme, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
@@ -38,7 +39,10 @@ use utoipa::{Modify, OpenApi};
             name = "Auth",
             description = "Password login, sessions, self-service password change, current user and reauthentication"
         ),
-        (name = "Users", description = "User listing, detail, creation and profile edits"),
+        (
+            name = "Users",
+            description = "User listing, detail, creation, profile edits and lifecycle actions"
+        ),
         (name = "Roles", description = "Role catalog and custom role management"),
         (name = "Permissions", description = "The code-owned permission catalog")
     ),
@@ -74,6 +78,9 @@ use utoipa::{Modify, OpenApi};
         CreateUserRequest,
         UpdateUserRequest,
         UserCreatedResponse,
+        SetUserRolesRequest,
+        SetUserStatusRequest,
+        ResetUserPasswordRequest,
     )),
     modifiers(&SecurityAddon)
 )]

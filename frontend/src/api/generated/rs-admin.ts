@@ -38,9 +38,12 @@ import type {
   ReauthenticateResponse,
   RefreshRequest,
   RefreshResponse,
+  ResetUserPasswordRequest,
   RoleDetail,
   RoleListResponse,
   SetRolePermissionsRequest,
+  SetUserRolesRequest,
+  SetUserStatusRequest,
   UpdateRoleRequest,
   UpdateUserRequest,
   UserCreatedResponse,
@@ -1891,6 +1894,434 @@ export const useUpdateUser = <TError = ProblemDetails, TContext = unknown>(
   TContext
 > => {
   return useMutation(getUpdateUserMutationOptions(options), queryClient)
+}
+
+export const resetUserPassword = (
+  id: string,
+  resetUserPasswordRequest: ResetUserPasswordRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<UserCreatedResponse>(
+    {
+      url: `/api/v1/users/${id}/reset-password`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: resetUserPasswordRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getResetUserPasswordMutationKey = () =>
+  ['resetUserPassword'] as const
+
+export const getResetUserPasswordMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resetUserPassword>>,
+    TError,
+    ResetUserPasswordMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resetUserPassword>>,
+  TError,
+  ResetUserPasswordMutationVariables,
+  TContext
+> => {
+  const mutationKey = getResetUserPasswordMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resetUserPassword>>,
+    ResetUserPasswordMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {}
+
+    return resetUserPassword(id, data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type ResetUserPasswordMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resetUserPassword>>
+>
+export type ResetUserPasswordMutationBody = ResetUserPasswordRequest
+export type ResetUserPasswordMutationError = ProblemDetails
+export type ResetUserPasswordMutationVariables = {
+  id: string
+  data: ResetUserPasswordRequest
+}
+
+export const useResetUserPassword = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof resetUserPassword>>,
+      TError,
+      ResetUserPasswordMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof resetUserPassword>>,
+  TError,
+  ResetUserPasswordMutationVariables,
+  TContext
+> => {
+  return useMutation(getResetUserPasswordMutationOptions(options), queryClient)
+}
+
+export const setUserRoles = (
+  id: string,
+  setUserRolesRequest: SetUserRolesRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<UserDetail>(
+    {
+      url: `/api/v1/users/${id}/roles`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      data: setUserRolesRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getSetUserRolesMutationKey = () => ['setUserRoles'] as const
+
+export const getSetUserRolesMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setUserRoles>>,
+    TError,
+    SetUserRolesMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setUserRoles>>,
+  TError,
+  SetUserRolesMutationVariables,
+  TContext
+> => {
+  const mutationKey = getSetUserRolesMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setUserRoles>>,
+    SetUserRolesMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {}
+
+    return setUserRoles(id, data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type SetUserRolesMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setUserRoles>>
+>
+export type SetUserRolesMutationBody = SetUserRolesRequest
+export type SetUserRolesMutationError = ProblemDetails
+export type SetUserRolesMutationVariables = {
+  id: string
+  data: SetUserRolesRequest
+}
+
+export const useSetUserRoles = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setUserRoles>>,
+      TError,
+      SetUserRolesMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof setUserRoles>>,
+  TError,
+  SetUserRolesMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetUserRolesMutationOptions(options), queryClient)
+}
+
+export const revokeUserSessions = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<void>(
+    { url: `/api/v1/users/${id}/sessions`, method: 'DELETE', signal },
+    options
+  )
+}
+
+export const getRevokeUserSessionsMutationKey = () =>
+  ['revokeUserSessions'] as const
+
+export const getRevokeUserSessionsMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof revokeUserSessions>>,
+    TError,
+    RevokeUserSessionsMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof revokeUserSessions>>,
+  TError,
+  RevokeUserSessionsMutationVariables,
+  TContext
+> => {
+  const mutationKey = getRevokeUserSessionsMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof revokeUserSessions>>,
+    RevokeUserSessionsMutationVariables
+  > = (props) => {
+    const { id } = props ?? {}
+
+    return revokeUserSessions(id, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type RevokeUserSessionsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof revokeUserSessions>>
+>
+
+export type RevokeUserSessionsMutationError = ProblemDetails
+export type RevokeUserSessionsMutationVariables = { id: string }
+
+export const useRevokeUserSessions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof revokeUserSessions>>,
+      TError,
+      RevokeUserSessionsMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof revokeUserSessions>>,
+  TError,
+  RevokeUserSessionsMutationVariables,
+  TContext
+> => {
+  return useMutation(getRevokeUserSessionsMutationOptions(options), queryClient)
+}
+
+export const setUserStatus = (
+  id: string,
+  setUserStatusRequest: SetUserStatusRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<UserDetail>(
+    {
+      url: `/api/v1/users/${id}/status`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      data: setUserStatusRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getSetUserStatusMutationKey = () => ['setUserStatus'] as const
+
+export const getSetUserStatusMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setUserStatus>>,
+    TError,
+    SetUserStatusMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setUserStatus>>,
+  TError,
+  SetUserStatusMutationVariables,
+  TContext
+> => {
+  const mutationKey = getSetUserStatusMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setUserStatus>>,
+    SetUserStatusMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {}
+
+    return setUserStatus(id, data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type SetUserStatusMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setUserStatus>>
+>
+export type SetUserStatusMutationBody = SetUserStatusRequest
+export type SetUserStatusMutationError = ProblemDetails
+export type SetUserStatusMutationVariables = {
+  id: string
+  data: SetUserStatusRequest
+}
+
+export const useSetUserStatus = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setUserStatus>>,
+      TError,
+      SetUserStatusMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof setUserStatus>>,
+  TError,
+  SetUserStatusMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetUserStatusMutationOptions(options), queryClient)
+}
+
+export const unlockUser = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<UserDetail>(
+    { url: `/api/v1/users/${id}/unlock`, method: 'POST', signal },
+    options
+  )
+}
+
+export const getUnlockUserMutationKey = () => ['unlockUser'] as const
+
+export const getUnlockUserMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof unlockUser>>,
+    TError,
+    UnlockUserMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof unlockUser>>,
+  TError,
+  UnlockUserMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUnlockUserMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof unlockUser>>,
+    UnlockUserMutationVariables
+  > = (props) => {
+    const { id } = props ?? {}
+
+    return unlockUser(id, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type UnlockUserMutationResult = NonNullable<
+  Awaited<ReturnType<typeof unlockUser>>
+>
+
+export type UnlockUserMutationError = ProblemDetails
+export type UnlockUserMutationVariables = { id: string }
+
+export const useUnlockUser = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof unlockUser>>,
+      TError,
+      UnlockUserMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof unlockUser>>,
+  TError,
+  UnlockUserMutationVariables,
+  TContext
+> => {
+  return useMutation(getUnlockUserMutationOptions(options), queryClient)
 }
 
 export const healthLive = (

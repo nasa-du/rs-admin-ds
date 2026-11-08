@@ -8,8 +8,9 @@
 
 use crate::identity::IdentifierConflict;
 use chrono::{DateTime, Utc};
-use rs_admin_domain::rbac::BuiltInRole;
-use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Transaction};
+use rs_admin_domain::lifecycle::UserStatus;
+use rs_admin_domain::rbac::{BASELINE_ROLE, BuiltInRole};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, QueryBuilder, Transaction};
 use std::fmt;
 use std::time::Duration;
 use uuid::Uuid;
@@ -418,6 +419,160 @@ pub async fn assign_roles(
     .await
     .map_err(UserStoreError::Database)?;
     Ok(())
+}
+
+/// The id of the immovable baseline `user` role.
+pub async fn baseline_role_id<'e, E>(executor: E) -> Result<Option<Uuid>, UserStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar("SELECT id FROM roles WHERE name = $1 AND is_builtin AND deleted_at IS NULL")
+        .bind(BASELINE_ROLE.code())
+        .fetch_optional(executor)
+        .await
+        .map_err(UserStoreError::Database)
+}
+
+/// Replace a user's role set. The baseline `user` role is preserved even when
+/// the caller's list omits it, so an administrator can never strip it. Grants
+/// not in `role_ids` are removed; new grants are attributed to `assigned_by`.
+pub async fn replace_user_roles(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    role_ids: &[Uuid],
+    assigned_by: Option<Uuid>,
+) -> Result<(), UserStoreError> {
+    sqlx::query(
+        "DELETE FROM user_roles ur
+         USING roles r
+         WHERE ur.user_id = $1
+           AND ur.role_id = r.id
+           AND NOT (ur.role_id = ANY($2::uuid[]))
+           AND NOT (r.is_builtin AND r.name = $3)",
+    )
+    .bind(user_id)
+    .bind(role_ids)
+    .bind(BASELINE_ROLE.code())
+    .execute(&mut **transaction)
+    .await
+    .map_err(UserStoreError::Database)?;
+
+    if role_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO user_roles (user_id, role_id, assigned_by)
+         SELECT $1, unnest($2::uuid[]), $3
+         ON CONFLICT (user_id, role_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(role_ids)
+    .bind(assigned_by)
+    .execute(&mut **transaction)
+    .await
+    .map_err(UserStoreError::Database)?;
+    Ok(())
+}
+
+/// Ids of enabled holders of the built-in `super_admin` role, in a stable
+/// order.
+macro_rules! enabled_super_admin_select {
+    () => {
+        "SELECT u.id
+         FROM users u
+         WHERE u.status = 'active'
+           AND EXISTS (
+               SELECT 1
+               FROM user_roles ur
+               JOIN roles r ON r.id = ur.role_id
+               WHERE ur.user_id = u.id
+                 AND r.is_builtin
+                 AND r.name = $1
+                 AND r.deleted_at IS NULL
+           )
+         ORDER BY u.id"
+    };
+    (for update) => {
+        concat!(enabled_super_admin_select!(), " FOR UPDATE")
+    };
+}
+
+const ENABLED_SUPER_ADMIN_SELECT: &str = enabled_super_admin_select!();
+
+/// Lock every enabled holder of the built-in `super_admin` role and return
+/// their ids in a stable order. Serializing the last-super-admin invariant on
+/// these rows makes concurrent disables unable to reach zero.
+///
+/// Role changes do not update the `users` row, so the qualification of a
+/// blocked `FOR UPDATE` scan may still reflect the pre-wait snapshot. Callers
+/// that make the invariant decision must re-read with
+/// [`find_enabled_super_admin_ids`] after acquiring every lock.
+pub async fn lock_enabled_super_admin_ids(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<Uuid>, UserStoreError> {
+    sqlx::query_scalar(enabled_super_admin_select!(for update))
+        .bind(BuiltInRole::SuperAdmin.code())
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(UserStoreError::Database)
+}
+
+/// Re-read the enabled super administrators with a fresh snapshot. Callers
+/// hold the user row locks acquired by [`lock_enabled_super_admin_ids`], so no
+/// concurrent demotion or disable can change this set before they commit.
+pub async fn find_enabled_super_admin_ids<'e, E>(executor: E) -> Result<Vec<Uuid>, UserStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    sqlx::query_scalar(ENABLED_SUPER_ADMIN_SELECT)
+        .bind(BuiltInRole::SuperAdmin.code())
+        .fetch_all(executor)
+        .await
+        .map_err(UserStoreError::Database)
+}
+
+/// Set the account status.
+pub async fn update_user_status(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    status: UserStatus,
+) -> Result<(), UserStoreError> {
+    sqlx::query("UPDATE users SET status = $2, updated_at = now() WHERE id = $1")
+        .bind(user_id)
+        .bind(status.as_str())
+        .execute(&mut **transaction)
+        .await
+        .map_err(UserStoreError::Database)?;
+    Ok(())
+}
+
+/// Install a new temporary password, clear the account-level login lock and
+/// return the database-defined expiry. The account status is left unchanged:
+/// a reset for a disabled user must not silently enable it.
+pub async fn reset_temporary_password(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    password_hash: &str,
+    temporary_password_ttl: Duration,
+) -> Result<DateTime<Utc>, UserStoreError> {
+    sqlx::query_scalar(
+        "UPDATE users
+         SET password_hash = $2,
+             must_change_password = true,
+             temporary_password_expires_at = now() + make_interval(secs => $3),
+             failed_login_count = 0,
+             locked_until = NULL,
+             last_failed_login_at = NULL,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING temporary_password_expires_at",
+    )
+    .bind(user_id)
+    .bind(password_hash)
+    .bind(temporary_password_ttl.as_secs_f64())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(UserStoreError::Database)
 }
 
 /// Update the administrator-managed profile fields. `None` leaves a field

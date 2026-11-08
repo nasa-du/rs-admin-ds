@@ -194,7 +194,7 @@ pub struct UserListResponse {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn store_unavailable(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn store_unavailable(error: impl std::fmt::Display) -> ApiError {
     tracing::warn!(error = %error, "user store operation failed");
     ApiError::service_unavailable()
 }
@@ -253,7 +253,7 @@ fn summarize_user(row: &UserRow, roles: &[RoleRef]) -> UserSummary {
     }
 }
 
-fn detail_user(row: &UserRow, roles: &[RoleRef]) -> UserDetail {
+pub(crate) fn detail_user(row: &UserRow, roles: &[RoleRef]) -> UserDetail {
     let summary = summarize_user(row, roles);
     UserDetail {
         temporary_password_expires_at: row
@@ -263,13 +263,13 @@ fn detail_user(row: &UserRow, roles: &[RoleRef]) -> UserDetail {
     }
 }
 
-fn user_target(row: &UserRow) -> DenialTarget<'_> {
+pub(crate) fn user_target(row: &UserRow) -> DenialTarget<'_> {
     DenialTarget::user(row.id, Some(row.username.as_str()))
 }
 
 /// Audit target for a user addressed by path, even before it is loaded: the id
 /// is known, the username snapshot is not.
-fn requested_user_target(raw: &str) -> Option<DenialTarget<'static>> {
+pub(crate) fn requested_user_target(raw: &str) -> Option<DenialTarget<'static>> {
     Uuid::parse_str(raw)
         .ok()
         .map(|id| DenialTarget::user(id, None))
@@ -285,7 +285,7 @@ fn role_ref(role: &UserRole) -> RoleRef {
 
 /// Role references in the same order everywhere: built-in roles first, then
 /// by name.
-fn role_refs(roles: &[UserRole]) -> Vec<RoleRef> {
+pub(crate) fn role_refs(roles: &[UserRole]) -> Vec<RoleRef> {
     let mut refs: Vec<RoleRef> = roles.iter().map(role_ref).collect();
     refs.sort_by(|left, right| {
         right
@@ -305,11 +305,12 @@ enum ScopeRole {
 
 /// Refuse a role assignment that exceeds the operator's grant capabilities,
 /// recording the first offending role in the audit chain (spec §6.3 rule 3).
-async fn ensure_roles_assignable(
+pub(crate) async fn ensure_roles_assignable(
     state: &AppState,
     services: &AuthServices,
     principal: &SessionPrincipal,
     context: &RequestContext,
+    operation: &'static str,
     roles: &[RoleRow],
 ) -> Result<(), ApiError> {
     let Some(role) = roles
@@ -324,7 +325,7 @@ async fn ensure_roles_assignable(
         principal,
         context,
         Denial::authorization(
-            "create_user",
+            operation,
             ErrorCode::PermissionSubsetViolation,
             Some(DenialTarget::role(role.id, Some(role.name.as_str()))),
         ),
@@ -335,7 +336,7 @@ async fn ensure_roles_assignable(
 
 /// Whether a non-super-admin may read and manage the target (spec §6.3 rule
 /// 4). Callers apply the `self` exception first.
-fn user_within_scope(effective: &EffectivePermissions, roles: &[UserRole]) -> bool {
+pub(crate) fn user_within_scope(effective: &EffectivePermissions, roles: &[UserRole]) -> bool {
     let parsed: Vec<ScopeRole> = roles
         .iter()
         .map(|role| {
@@ -373,7 +374,7 @@ fn identity_error(pointer: &str, error: IdentityError) -> ApiError {
     validation_error(pointer, code)
 }
 
-fn policy_error(violation: PolicyViolation) -> ApiError {
+pub(crate) fn policy_error(violation: PolicyViolation) -> ApiError {
     ApiError::new(ErrorCode::PasswordPolicyViolation).with_errors(vec![FieldError {
         pointer: "/password".to_owned(),
         code: ErrorCode::PasswordPolicyViolation.as_str().to_owned(),
@@ -381,7 +382,7 @@ fn policy_error(violation: PolicyViolation) -> ApiError {
     }])
 }
 
-fn unknown_role_error() -> ApiError {
+pub(crate) fn unknown_role_error() -> ApiError {
     ApiError::new(ErrorCode::UnknownRole).with_errors(vec![FieldError {
         pointer: "/role_ids".to_owned(),
         code: ErrorCode::UnknownRole.as_str().to_owned(),
@@ -390,7 +391,7 @@ fn unknown_role_error() -> ApiError {
 }
 
 /// Parse `role_ids` in request order, rejecting duplicates and malformed ids.
-fn parse_role_ids(raw: &[String]) -> Result<Vec<Uuid>, ApiError> {
+pub(crate) fn parse_role_ids(raw: &[String]) -> Result<Vec<Uuid>, ApiError> {
     let mut ids = Vec::with_capacity(raw.len());
     for (index, value) in raw.iter().enumerate() {
         let id = Uuid::parse_str(value.trim())
@@ -419,7 +420,7 @@ fn map_user_store_error(error: UserStoreError) -> ApiError {
     }
 }
 
-fn temporary_password_generation_failed(error: impl std::fmt::Display) -> ApiError {
+pub(crate) fn temporary_password_generation_failed(error: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %error, "temporary password generation failed");
     ApiError::new(ErrorCode::InternalError)
 }
@@ -820,7 +821,15 @@ pub async fn create_user(
         if roles.len() != requested_role_ids.len() {
             return Err(unknown_role_error());
         }
-        ensure_roles_assignable(&state, services, &principal, &context, &roles).await?;
+        ensure_roles_assignable(
+            &state,
+            services,
+            &principal,
+            &context,
+            "create_user",
+            &roles,
+        )
+        .await?;
     }
 
     require_recent_auth(&state, services, &principal, &context, "create_user", None).await?;
@@ -881,7 +890,15 @@ pub async fn create_user(
             .any(|role| !role_is_assignable(role, &principal.effective))
         {
             transaction.rollback().await.ok();
-            ensure_roles_assignable(&state, services, &principal, &context, &roles).await?;
+            ensure_roles_assignable(
+                &state,
+                services,
+                &principal,
+                &context,
+                "create_user",
+                &roles,
+            )
+            .await?;
             return Err(ApiError::new(ErrorCode::PermissionSubsetViolation));
         }
     }

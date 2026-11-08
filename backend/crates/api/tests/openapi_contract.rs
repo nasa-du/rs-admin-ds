@@ -371,3 +371,196 @@ fn problem_details_and_the_closed_error_catalog_are_in_the_schema() {
     assert!(values.contains(&"validation_failed"));
     assert!(values.contains(&"service_unavailable"));
 }
+
+#[test]
+fn roles_and_permissions_operations_are_documented_with_stable_ids() {
+    let doc = document();
+
+    for (path, method, operation_id, tag, success, schema) in [
+        (
+            "/api/v1/roles",
+            "get",
+            "listRoles",
+            "Roles",
+            "200",
+            "#/components/schemas/RoleListResponse",
+        ),
+        (
+            "/api/v1/roles",
+            "post",
+            "createRole",
+            "Roles",
+            "201",
+            "#/components/schemas/RoleDetail",
+        ),
+        (
+            "/api/v1/roles/{id}",
+            "get",
+            "getRole",
+            "Roles",
+            "200",
+            "#/components/schemas/RoleDetail",
+        ),
+        (
+            "/api/v1/roles/{id}",
+            "patch",
+            "updateRole",
+            "Roles",
+            "200",
+            "#/components/schemas/RoleDetail",
+        ),
+        (
+            "/api/v1/roles/{id}/permissions",
+            "put",
+            "setRolePermissions",
+            "Roles",
+            "200",
+            "#/components/schemas/RoleDetail",
+        ),
+        (
+            "/api/v1/permissions",
+            "get",
+            "listPermissions",
+            "Permissions",
+            "200",
+            "#/components/schemas/PermissionListResponse",
+        ),
+    ] {
+        let operation = &doc["paths"][path][method];
+        assert_eq!(operation["operationId"], operation_id, "{method} {path}");
+        assert_eq!(operation["tags"][0], tag, "{method} {path}");
+        assert_eq!(
+            operation["security"][0]["bearerAuth"],
+            serde_json::json!([]),
+            "{method} {path} must require bearerAuth"
+        );
+        assert_eq!(
+            operation["responses"][success]["content"]["application/json"]["schema"]["$ref"],
+            schema,
+            "{method} {path} response {success}"
+        );
+        assert!(
+            operation["responses"][success]["headers"]["X-Request-Id"].is_object(),
+            "{method} {path} must document X-Request-Id"
+        );
+    }
+
+    let delete = &doc["paths"]["/api/v1/roles/{id}"]["delete"];
+    assert_eq!(delete["operationId"], "deleteRole");
+    assert_eq!(delete["tags"][0], "Roles");
+    assert_eq!(
+        delete["responses"]["204"]["headers"]["X-Request-Id"]["schema"]["type"],
+        "string"
+    );
+
+    let create = &doc["paths"]["/api/v1/roles"]["post"];
+    assert_eq!(
+        create["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/CreateRoleRequest"
+    );
+    assert!(
+        create["responses"]["201"]["headers"]["Location"].is_object(),
+        "creation must document Location"
+    );
+
+    let list = &doc["paths"]["/api/v1/roles"]["get"];
+    let params: Vec<&str> = list["parameters"]
+        .as_array()
+        .expect("list parameters")
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    for expected in ["q", "is_builtin", "page", "page_size", "sort"] {
+        assert!(
+            params.contains(&expected),
+            "missing query parameter {expected}"
+        );
+    }
+
+    let update = &doc["paths"]["/api/v1/roles/{id}"]["patch"];
+    assert_eq!(
+        update["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/UpdateRoleRequest"
+    );
+    let set_permissions = &doc["paths"]["/api/v1/roles/{id}/permissions"]["put"];
+    assert_eq!(
+        set_permissions["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/SetRolePermissionsRequest"
+    );
+
+    // Every write documents the authorization, validation and reauthentication
+    // codes, with the shared response headers.
+    for (path, method) in [
+        ("/api/v1/roles", "post"),
+        ("/api/v1/roles/{id}", "patch"),
+        ("/api/v1/roles/{id}", "delete"),
+        ("/api/v1/roles/{id}/permissions", "put"),
+    ] {
+        let operation = &doc["paths"][path][method];
+        for status in ["401", "403", "503"] {
+            assert_eq!(
+                operation["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+                "#/components/schemas/ProblemDetails",
+                "{method} {path} must document {status} as a problem"
+            );
+            assert!(
+                operation["responses"][status]["headers"]["X-Request-Id"].is_object(),
+                "{method} {path} {status} must document X-Request-Id"
+            );
+        }
+        assert!(
+            operation["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+            "{method} {path} 401 must document the Bearer challenge"
+        );
+    }
+
+    // Every error response on this surface carries the common headers:
+    // X-Request-Id everywhere, plus the Bearer challenge on 401.
+    for (path, operations) in doc["paths"].as_object().expect("paths") {
+        if path != "/api/v1/permissions" && !path.starts_with("/api/v1/roles") {
+            continue;
+        }
+        for (method, operation) in operations.as_object().expect("operations") {
+            for (status, response) in operation["responses"].as_object().expect("responses") {
+                if !(status.starts_with('4') || status.starts_with('5')) {
+                    continue;
+                }
+                assert!(
+                    response["headers"]["X-Request-Id"].is_object(),
+                    "{method} {path} {status} must document X-Request-Id"
+                );
+                if status == "401" {
+                    assert!(
+                        response["headers"]["WWW-Authenticate"].is_object(),
+                        "{method} {path} 401 must document the Bearer challenge"
+                    );
+                }
+            }
+        }
+    }
+
+    let schemas = &doc["components"]["schemas"];
+    for name in [
+        "RoleSummary",
+        "RoleDetail",
+        "RoleListResponse",
+        "PermissionGroup",
+        "PermissionItem",
+        "PermissionListResponse",
+    ] {
+        assert!(
+            schemas[name]["properties"].is_object() || schemas[name]["type"] == "object",
+            "missing schema {name}"
+        );
+    }
+    assert_eq!(
+        schemas["RoleSummary"]["properties"]["permission_keys"]["items"]["type"],
+        "string"
+    );
+    for flag in ["assignable", "manageable"] {
+        assert_eq!(
+            schemas["RoleSummary"]["properties"][flag]["type"], "boolean",
+            "RoleSummary.{flag}"
+        );
+    }
+}

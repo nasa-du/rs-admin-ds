@@ -378,8 +378,20 @@ pub async fn lock_refresh_context(
 pub async fn database_clock_now(
     transaction: &mut Transaction<'_, Postgres>,
 ) -> Result<DateTime<Utc>, AuthStoreError> {
+    clock_timestamp(&mut **transaction).await
+}
+
+/// Same database wall-clock time for callers that have no transaction open.
+pub async fn pool_clock_now(pool: &PgPool) -> Result<DateTime<Utc>, AuthStoreError> {
+    clock_timestamp(pool).await
+}
+
+async fn clock_timestamp<'e, E>(executor: E) -> Result<DateTime<Utc>, AuthStoreError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&mut **transaction)
+        .fetch_one(executor)
         .await
         .map_err(AuthStoreError::Database)
 }

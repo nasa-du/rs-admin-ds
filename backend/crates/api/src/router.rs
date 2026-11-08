@@ -111,10 +111,21 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(crate::auth::change_password))
         .layer(DefaultBodyLimit::max(AUTH_JSON_BODY_BYTES));
 
+    let roles = OpenApiRouter::new()
+        .routes(routes!(crate::roles::list_roles, crate::roles::create_role))
+        .routes(routes!(
+            crate::roles::get_role,
+            crate::roles::update_role_metadata,
+            crate::roles::delete_role
+        ))
+        .routes(routes!(crate::roles::set_role_permissions))
+        .routes(routes!(crate::roles::list_permissions));
+
     OpenApiRouter::new()
         .routes(routes!(health_live))
         .routes(routes!(health_ready))
         .merge(auth)
+        .merge(roles)
 }
 
 /// Build the production router.

@@ -24,15 +24,22 @@ import { customInstance } from '../mutator'
 import type {
   ChangePasswordRequest,
   ChangePasswordResponse,
+  CreateRoleRequest,
   HealthStatus,
+  ListRolesParams,
   LoginRequest,
   LoginResponse,
   LogoutRequest,
+  PermissionListResponse,
   ProblemDetails,
   ReauthenticateRequest,
   ReauthenticateResponse,
   RefreshRequest,
   RefreshResponse,
+  RoleDetail,
+  RoleListResponse,
+  SetRolePermissionsRequest,
+  UpdateRoleRequest,
   UserSelfResponse,
 } from './model'
 
@@ -680,6 +687,761 @@ export const useRefreshToken = <TError = ProblemDetails, TContext = unknown>(
   TContext
 > => {
   return useMutation(getRefreshTokenMutationOptions(options), queryClient)
+}
+
+export const listPermissions = (
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<PermissionListResponse>(
+    { url: `/api/v1/permissions`, method: 'GET', signal },
+    options
+  )
+}
+
+export const getListPermissionsQueryKey = () => {
+  return [`/api/v1/permissions`] as const
+}
+
+export const getListPermissionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPermissions>>,
+  TError = ProblemDetails,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof listPermissions>>, TError, TData>
+  >
+  request?: SecondParameter<typeof customInstance>
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {}
+
+  const queryKey = queryOptions?.queryKey ?? getListPermissionsQueryKey()
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPermissions>>> = ({
+    signal,
+  }) => listPermissions(requestOptions, signal)
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPermissions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListPermissionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPermissions>>
+>
+export type ListPermissionsQueryError = ProblemDetails
+
+export function useListPermissions<
+  TData = Awaited<ReturnType<typeof listPermissions>>,
+  TError = ProblemDetails,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof listPermissions>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useListPermissions<
+  TData = Awaited<ReturnType<typeof listPermissions>>,
+  TError = ProblemDetails,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPermissions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPermissions>>,
+          TError,
+          Awaited<ReturnType<typeof listPermissions>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useListPermissions<
+  TData = Awaited<ReturnType<typeof listPermissions>>,
+  TError = ProblemDetails,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPermissions>>,
+        TError,
+        TData
+      >
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+
+export function useListPermissions<
+  TData = Awaited<ReturnType<typeof listPermissions>>,
+  TError = ProblemDetails,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPermissions>>,
+        TError,
+        TData
+      >
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+} {
+  const queryOptions = getListPermissionsQueryOptions(options)
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> }
+
+  return withQueryKey(query, queryOptions.queryKey)
+}
+
+export const listRoles = (
+  params?: ListRolesParams,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<RoleListResponse>(
+    { url: `/api/v1/roles`, method: 'GET', params, signal },
+    options
+  )
+}
+
+export const getListRolesQueryKey = (params?: ListRolesParams) => {
+  return [`/api/v1/roles`, ...(params ? [params] : [])] as const
+}
+
+export const getListRolesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRoles>>,
+  TError = ProblemDetails,
+>(
+  params?: ListRolesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRoles>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  }
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {}
+
+  const queryKey = queryOptions?.queryKey ?? getListRolesQueryKey(params)
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listRoles>>> = ({
+    signal,
+  }) => listRoles(params, requestOptions, signal)
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRoles>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type ListRolesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRoles>>
+>
+export type ListRolesQueryError = ProblemDetails
+
+export function useListRoles<
+  TData = Awaited<ReturnType<typeof listRoles>>,
+  TError = ProblemDetails,
+>(
+  params: undefined | ListRolesParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRoles>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRoles>>,
+          TError,
+          Awaited<ReturnType<typeof listRoles>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useListRoles<
+  TData = Awaited<ReturnType<typeof listRoles>>,
+  TError = ProblemDetails,
+>(
+  params?: ListRolesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRoles>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRoles>>,
+          TError,
+          Awaited<ReturnType<typeof listRoles>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useListRoles<
+  TData = Awaited<ReturnType<typeof listRoles>>,
+  TError = ProblemDetails,
+>(
+  params?: ListRolesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRoles>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+
+export function useListRoles<
+  TData = Awaited<ReturnType<typeof listRoles>>,
+  TError = ProblemDetails,
+>(
+  params?: ListRolesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listRoles>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+} {
+  const queryOptions = getListRolesQueryOptions(params, options)
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> }
+
+  return withQueryKey(query, queryOptions.queryKey)
+}
+
+export const createRole = (
+  createRoleRequest: CreateRoleRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<RoleDetail>(
+    {
+      url: `/api/v1/roles`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: createRoleRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getCreateRoleMutationKey = () => ['createRole'] as const
+
+export const getCreateRoleMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createRole>>,
+    TError,
+    CreateRoleMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createRole>>,
+  TError,
+  CreateRoleMutationVariables,
+  TContext
+> => {
+  const mutationKey = getCreateRoleMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createRole>>,
+    CreateRoleMutationVariables
+  > = (props) => {
+    const { data } = props ?? {}
+
+    return createRole(data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type CreateRoleMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createRole>>
+>
+export type CreateRoleMutationBody = CreateRoleRequest
+export type CreateRoleMutationError = ProblemDetails
+export type CreateRoleMutationVariables = { data: CreateRoleRequest }
+
+export const useCreateRole = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof createRole>>,
+      TError,
+      CreateRoleMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof createRole>>,
+  TError,
+  CreateRoleMutationVariables,
+  TContext
+> => {
+  return useMutation(getCreateRoleMutationOptions(options), queryClient)
+}
+
+export const getRole = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<RoleDetail>(
+    { url: `/api/v1/roles/${id}`, method: 'GET', signal },
+    options
+  )
+}
+
+export const getGetRoleQueryKey = (id: string) => {
+  return [`/api/v1/roles/${id}`] as const
+}
+
+export const getGetRoleQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRole>>,
+  TError = ProblemDetails,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  }
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {}
+
+  const queryKey = queryOptions?.queryKey ?? getGetRoleQueryKey(id)
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getRole>>> = ({
+    signal,
+  }) => getRole(id, requestOptions, signal)
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: id !== null && id !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData> & {
+    queryKey: DataTag<QueryKey, TData, TError>
+  }
+}
+
+export type GetRoleQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRole>>
+>
+export type GetRoleQueryError = ProblemDetails
+
+export function useGetRole<
+  TData = Awaited<ReturnType<typeof getRole>>,
+  TError = ProblemDetails,
+>(
+  id: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRole>>,
+          TError,
+          Awaited<ReturnType<typeof getRole>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useGetRole<
+  TData = Awaited<ReturnType<typeof getRole>>,
+  TError = ProblemDetails,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRole>>,
+          TError,
+          Awaited<ReturnType<typeof getRole>>
+        >,
+        'initialData'
+      >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+export function useGetRole<
+  TData = Awaited<ReturnType<typeof getRole>>,
+  TError = ProblemDetails,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+}
+
+export function useGetRole<
+  TData = Awaited<ReturnType<typeof getRole>>,
+  TError = ProblemDetails,
+>(
+  id: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRole>>, TError, TData>
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>
+} {
+  const queryOptions = getGetRoleQueryOptions(id, options)
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> }
+
+  return withQueryKey(query, queryOptions.queryKey)
+}
+
+export const deleteRole = (
+  id: string,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<void>(
+    { url: `/api/v1/roles/${id}`, method: 'DELETE', signal },
+    options
+  )
+}
+
+export const getDeleteRoleMutationKey = () => ['deleteRole'] as const
+
+export const getDeleteRoleMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteRole>>,
+    TError,
+    DeleteRoleMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteRole>>,
+  TError,
+  DeleteRoleMutationVariables,
+  TContext
+> => {
+  const mutationKey = getDeleteRoleMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteRole>>,
+    DeleteRoleMutationVariables
+  > = (props) => {
+    const { id } = props ?? {}
+
+    return deleteRole(id, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type DeleteRoleMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteRole>>
+>
+
+export type DeleteRoleMutationError = ProblemDetails
+export type DeleteRoleMutationVariables = { id: string }
+
+export const useDeleteRole = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof deleteRole>>,
+      TError,
+      DeleteRoleMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof deleteRole>>,
+  TError,
+  DeleteRoleMutationVariables,
+  TContext
+> => {
+  return useMutation(getDeleteRoleMutationOptions(options), queryClient)
+}
+
+export const updateRole = (
+  id: string,
+  updateRoleRequest: UpdateRoleRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<RoleDetail>(
+    {
+      url: `/api/v1/roles/${id}`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: updateRoleRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getUpdateRoleMutationKey = () => ['updateRole'] as const
+
+export const getUpdateRoleMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateRole>>,
+    TError,
+    UpdateRoleMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateRole>>,
+  TError,
+  UpdateRoleMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdateRoleMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateRole>>,
+    UpdateRoleMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {}
+
+    return updateRole(id, data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type UpdateRoleMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateRole>>
+>
+export type UpdateRoleMutationBody = UpdateRoleRequest
+export type UpdateRoleMutationError = ProblemDetails
+export type UpdateRoleMutationVariables = {
+  id: string
+  data: UpdateRoleRequest
+}
+
+export const useUpdateRole = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof updateRole>>,
+      TError,
+      UpdateRoleMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof updateRole>>,
+  TError,
+  UpdateRoleMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdateRoleMutationOptions(options), queryClient)
+}
+
+export const setRolePermissions = (
+  id: string,
+  setRolePermissionsRequest: SetRolePermissionsRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<RoleDetail>(
+    {
+      url: `/api/v1/roles/${id}/permissions`,
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      data: setRolePermissionsRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getSetRolePermissionsMutationKey = () =>
+  ['setRolePermissions'] as const
+
+export const getSetRolePermissionsMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof setRolePermissions>>,
+    TError,
+    SetRolePermissionsMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof setRolePermissions>>,
+  TError,
+  SetRolePermissionsMutationVariables,
+  TContext
+> => {
+  const mutationKey = getSetRolePermissionsMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof setRolePermissions>>,
+    SetRolePermissionsMutationVariables
+  > = (props) => {
+    const { id, data } = props ?? {}
+
+    return setRolePermissions(id, data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type SetRolePermissionsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof setRolePermissions>>
+>
+export type SetRolePermissionsMutationBody = SetRolePermissionsRequest
+export type SetRolePermissionsMutationError = ProblemDetails
+export type SetRolePermissionsMutationVariables = {
+  id: string
+  data: SetRolePermissionsRequest
+}
+
+export const useSetRolePermissions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof setRolePermissions>>,
+      TError,
+      SetRolePermissionsMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof setRolePermissions>>,
+  TError,
+  SetRolePermissionsMutationVariables,
+  TContext
+> => {
+  return useMutation(getSetRolePermissionsMutationOptions(options), queryClient)
 }
 
 export const healthLive = (

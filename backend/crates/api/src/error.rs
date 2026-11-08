@@ -41,6 +41,11 @@ pub struct ProblemDetails {
     pub request_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub errors: Option<Vec<FieldError>>,
+    /// Optional structured context for machine handling. Reauthentication refusals add
+    /// `{"max_age": <seconds>}` (spec §5.8); other errors usually omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Object)]
+    pub details: Option<Value>,
 }
 
 impl ProblemDetails {
@@ -58,6 +63,7 @@ impl ProblemDetails {
             instance: instance.into(),
             request_id: request_id.into(),
             errors: None,
+            details: None,
         }
     }
 }
@@ -101,6 +107,7 @@ struct ApiErrorInner {
     code: ErrorCode,
     detail: Option<String>,
     errors: Option<Vec<FieldError>>,
+    details: Option<Value>,
     headers: HeaderMap,
 }
 
@@ -110,8 +117,16 @@ impl ApiError {
             code,
             detail: None,
             errors: None,
+            details: None,
             headers: HeaderMap::new(),
         }))
+    }
+
+    /// Attach structured context for the client (for example `max_age` on a
+    /// reauthentication refusal).
+    pub fn with_details(mut self, details: Value) -> Self {
+        self.0.details = Some(details);
+        self
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
@@ -156,12 +171,14 @@ impl IntoResponse for ApiError {
             code,
             detail,
             errors,
+            details: context,
             headers,
         } = *self.0;
 
         let mut details = ProblemDetails::for_code(code, "", "");
         details.detail = detail.unwrap_or_else(|| code.detail().to_owned());
         details.errors = errors;
+        details.details = context;
 
         let status =
             StatusCode::from_u16(details.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

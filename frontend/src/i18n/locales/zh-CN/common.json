@@ -11,6 +11,16 @@
   "pickDate": "选择日期",
   "selectPlaceholder": "请选择",
   "close": "关闭",
+  "requestId": {
+    "label": "请求 ID",
+    "copy": "复制请求 ID",
+    "copied": "已复制"
+  },
+  "error": {
+    "retry": "重试",
+    "retryIn": "请在 {{seconds}} 秒后重试。",
+    "technicalCode": "错误码：{{code}}"
+  },
   "sidebar": {
     "mobileTitle": "侧边栏",
     "mobileDescription": "显示移动端侧边栏。"
@@ -73,10 +83,5 @@
     "clearSelection": "清除选择（Esc）",
     "actionsFor_other": "{{entity}}：已选择 {{count}} 项",
     "announcement_other": "已选择 {{count}} 个{{entity}}。批量操作工具栏可用。"
-  },
-  "backendStatus": {
-    "checking": "正在检查后端连接…",
-    "ready": "后端已就绪。",
-    "unreachable": "后端不可用。"
   }
 }

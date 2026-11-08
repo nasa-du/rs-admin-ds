@@ -261,6 +261,73 @@ describe('refreshAccessToken', () => {
   })
 })
 
+describe('refreshMe', () => {
+  it('fetches the current user and updates the cached copy', async () => {
+    const refreshed = { ...USER, display_name: 'Alice Updated' }
+    const { session, queryClient, fetchMe } = setup({
+      fetchMe: vi.fn(async () => refreshed),
+    })
+    authStore.getState().authenticate('fresh-token')
+
+    await expect(session.refreshMe()).resolves.toEqual(refreshed)
+
+    expect(fetchMe).toHaveBeenCalledTimes(1)
+    expect(queryClient.getQueryData(authKeys.me)).toEqual(refreshed)
+  })
+})
+
+describe('session invalid notifications', () => {
+  it('notifies listeners once when an authenticated refresh fails', async () => {
+    const { session } = setup({
+      refresh: vi.fn(async () => {
+        throw axiosProblem(401, 'refresh_token_invalid')
+      }),
+    })
+    authStore.getState().authenticate('stale-token')
+    const listener = vi.fn()
+
+    session.onSessionInvalid(listener)
+
+    await expect(session.refreshAccessToken()).rejects.toBeInstanceOf(ApiError)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith('unauthenticated')
+  })
+
+  it('does not notify on a transient refresh failure', async () => {
+    const { session } = setup({
+      refresh: vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    })
+    authStore.getState().authenticate('stale-token')
+    const listener = vi.fn()
+
+    session.onSessionInvalid(listener)
+
+    await expect(session.refreshAccessToken()).rejects.toThrow(
+      'Failed to fetch'
+    )
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('reports account_disabled and stops after unsubscribe', () => {
+    const { session } = setup()
+    const listener = vi.fn()
+    const unsubscribe = session.onSessionInvalid(listener)
+
+    session.handleAccountDisabled(
+      new ApiError({ code: 'account_disabled', status: 403 })
+    )
+    unsubscribe()
+    session.handleAccountDisabled(
+      new ApiError({ code: 'account_disabled', status: 403 })
+    )
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith('account_disabled')
+  })
+})
+
 describe('login and logout transitions', () => {
   it('clears the old query cache before applying a login response', () => {
     const { session, queryClient } = setup()

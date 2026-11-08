@@ -14,6 +14,7 @@ export const PAGE_TITLE_KEYS = {
   settingsNotifications: 'settings:nav.notifications',
   settingsDisplay: 'settings:nav.display',
   signIn: 'auth:signIn.title',
+  changePassword: 'auth:changePassword.title',
   unauthorized: 'errors:pages.unauthorized.title',
   forbidden: 'errors:pages.forbidden.title',
   notFound: 'errors:pages.notFound.title',

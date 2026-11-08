@@ -3,6 +3,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 import { type ApiError, toApiError } from '@/lib/api-error'
+import { notifyPasswordChangeRequired } from '@/features/auth/auth-interruptions'
 import { authSession } from '@/features/auth/auth-session'
 import { authStore } from '@/features/auth/auth-store'
 import {
@@ -74,6 +75,12 @@ apiClient.interceptors.response.use(
       ? (error.config as RetryableConfig | undefined)
       : undefined
     const apiError = toApiError(error)
+
+    if (apiError?.code === 'password_change_required') {
+      // The shell moves the user to /change-password; the session stays valid.
+      notifyPasswordChangeRequired()
+      throw apiError
+    }
 
     if (apiError?.code === 'account_disabled') {
       authSession.handleAccountDisabled(apiError)

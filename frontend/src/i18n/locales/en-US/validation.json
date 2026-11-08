@@ -14,6 +14,7 @@
   "selectLanguage": "Select a language.",
   "selectNotificationType": "Select a notification type.",
   "selectAtLeastOneItem": "Select at least one item.",
+  "passwordMismatch": "The passwords do not match.",
   "password": {
     "too_short": "The password is too short.",
     "too_long": "The password is too long.",

@@ -16,3 +16,20 @@ export type Permission =
   | 'roles.update'
   | 'roles.delete'
   | 'audit.read'
+
+export type PermissionHolder = {
+  is_super_admin: boolean
+  permissions: readonly string[]
+}
+
+/**
+ * Frontend permission gate (ADR-0006 §6). A super admin always passes; the
+ * server remains the final authority for every decision.
+ */
+export function hasPermission(
+  user: PermissionHolder | null | undefined,
+  permission: Permission
+): boolean {
+  if (!user) return false
+  return user.is_super_admin || user.permissions.includes(permission)
+}

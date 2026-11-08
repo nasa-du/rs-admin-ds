@@ -3,7 +3,13 @@ import ReactDOM from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { queryClient } from '@/lib/query-client'
+import { subscribeToAuthBroadcast } from '@/features/auth/auth-broadcast'
+import {
+  handlePasswordChangeRequired,
+  onPasswordChangeRequired,
+} from '@/features/auth/auth-interruptions'
 import { authSession } from '@/features/auth/auth-session'
+import { handleRemoteSignOut } from '@/features/auth/sign-out'
 import { LocaleProvider } from './components/locale-provider'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
@@ -29,6 +35,51 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+function redirectToSignIn(redirect: string) {
+  void router.navigate({
+    to: '/sign-in',
+    search: { redirect },
+    replace: true,
+  })
+}
+
+// A refresh failure clears the session inside `authSession`; move any page
+// other than sign-in to sign-in with the current path as the redirect target
+// (ADR-0006 §3).
+authSession.onSessionInvalid(() => {
+  const { pathname, href } = router.state.location
+  if (pathname !== '/sign-in') redirectToSignIn(href)
+})
+
+// A restricted session that reaches a business endpoint is moved to the
+// password-change page (spec §9.5).
+onPasswordChangeRequired(() => {
+  const { pathname, href } = router.state.location
+  handlePasswordChangeRequired({
+    pathname,
+    href,
+    redirectToChangePassword: (redirect) => {
+      void router.navigate({
+        to: '/change-password',
+        search: { redirect },
+        replace: true,
+      })
+    },
+  })
+})
+
+// Cross-tab sign-out sync (spec §9.6): other tabs clear state and protected
+// pages return to sign-in.
+subscribeToAuthBroadcast(() => {
+  const { pathname, href } = router.state.location
+  handleRemoteSignOut({
+    signOut: () => authSession.signOut(),
+    pathname,
+    href,
+    redirectToSignIn,
+  })
+})
 
 // Start cold-start session restoration without blocking public routes. Route
 // guards await the same single-flight `bootstrap()` promise.

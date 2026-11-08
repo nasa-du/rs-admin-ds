@@ -8,7 +8,7 @@ use chrono::{Duration, Utc};
 use rs_admin_store::auth::{
     AuthStoreError, NewRefreshToken, NewSession, create_session, find_user_by_email,
     find_user_by_username, insert_refresh_token, load_active_session, load_role_grants,
-    lock_refresh_context, lock_user_for_login, mark_refresh_token_rotated, record_login_failure,
+    lock_refresh_context, lock_user_row, mark_refresh_token_rotated, record_login_failure,
     reset_login_failures, update_successful_login,
 };
 use sqlx::PgPool;
@@ -283,7 +283,7 @@ async fn login_locks_the_user_row_for_the_transaction(pool: PgPool) {
     let user_id = insert_user(&pool, "alice", "alice@example.com").await;
 
     let mut transaction = pool.begin().await.expect("begin");
-    let user = lock_user_for_login(&mut transaction, user_id)
+    let user = lock_user_row(&mut transaction, user_id)
         .await
         .expect("lock")
         .expect("user");

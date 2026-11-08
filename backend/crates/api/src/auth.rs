@@ -34,12 +34,14 @@ use rs_admin_security::{
 use rs_admin_store::Database;
 use rs_admin_store::audit::transaction_now;
 use rs_admin_store::auth::{
-    AuthSession, AuthUser, NewRefreshToken, NewSession, REVOKE_REASON_TOKEN_REUSE, RefreshContext,
-    UserRole, create_session, database_clock_now, find_refresh_token, find_user_by_email,
-    find_user_by_id, find_user_by_username, insert_refresh_token, load_active_session,
-    load_role_grants, lock_refresh_context, lock_user_for_login, mark_refresh_token_rotated,
-    record_login_failure, replace_password_hash, reset_login_failures, revoke_refresh_family,
-    revoke_session, touch_authenticated_at, touch_session_activity, update_successful_login,
+    AuthSession, AuthUser, NewRefreshToken, NewSession, REVOKE_REASON_EXCESS_SESSIONS,
+    REVOKE_REASON_LOGOUT, REVOKE_REASON_LOGOUT_ALL, REVOKE_REASON_TOKEN_REUSE, RefreshContext,
+    UserRole, bump_token_version, count_active_sessions, create_session, database_clock_now,
+    find_oldest_active_sessions, find_refresh_token, find_user_by_email, find_user_by_id,
+    find_user_by_username, insert_refresh_token, load_active_session, load_role_grants,
+    lock_refresh_context, lock_user_row, mark_refresh_token_rotated, record_login_failure,
+    replace_password_hash, reset_login_failures, revoke_session_family, revoke_user_refresh_tokens,
+    revoke_user_sessions, touch_authenticated_at, touch_session_activity, update_successful_login,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -59,6 +61,11 @@ pub const SESSION_IDLE_SECONDS: i64 = 30 * 60;
 
 /// Session absolute lifetime.
 pub const SESSION_ABSOLUTE_SECONDS: i64 = 12 * 60 * 60;
+
+/// Maximum number of active (unrevoked, unexpired) sessions a user may hold; a
+/// new login evicts the least recently active session beyond this cap
+/// (spec §5.3).
+pub const MAX_ACTIVE_SESSIONS_PER_USER: i64 = 5;
 
 /// Largest accepted authentication request body (spec §8.1).
 pub const AUTH_JSON_BODY_BYTES: usize = 1024;
@@ -249,6 +256,13 @@ pub struct RefreshResponse {
     pub token_type: String,
     pub expires_in: i64,
 }
+
+/// Request body for `POST /auth/logout` and `POST /auth/logout-all`. Both
+/// identify the caller by cookie or Bearer token, so the body is an empty JSON
+/// object.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LogoutRequest {}
 
 #[utoipa::path(
     post,
@@ -484,7 +498,7 @@ pub async fn reauthenticate(
         .await
         .map_err(dependency_unavailable)?;
 
-    let locked = lock_user_for_login(&mut transaction, principal.user.id)
+    let locked = lock_user_row(&mut transaction, principal.user.id)
         .await
         .map_err(dependency_unavailable)?
         .ok_or_else(ApiError::session_invalid)?;
@@ -718,6 +732,225 @@ pub async fn refresh(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout",
+    tag = "Auth",
+    operation_id = "logout",
+    security(("refreshCookie" = [])),
+    request_body = LogoutRequest,
+    responses(
+        (
+            status = 204,
+            description = "Current session revoked and refresh cookie cleared (idempotent)",
+            headers(
+                ("Set-Cookie" = String, description = "Cleared host-only refresh cookie"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 503,
+            description = "Authentication service unavailable",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
+pub async fn logout(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    ApiJson(_payload): ApiJson<LogoutRequest>,
+) -> Result<Response, ApiError> {
+    let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
+    let Some(presented) = refresh_token_from_cookie(&headers) else {
+        return Ok(logout_response());
+    };
+    let presented_hash = hash_refresh_token(presented);
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    // Locking the session serializes logout against a concurrent refresh: once
+    // this transaction commits, the family can no longer rotate.
+    let Some(context) = lock_refresh_context(&mut transaction, &presented_hash)
+        .await
+        .map_err(dependency_unavailable)?
+    else {
+        transaction.rollback().await.ok();
+        return Ok(logout_response());
+    };
+    let now = database_clock_now(&mut transaction)
+        .await
+        .map_err(dependency_unavailable)?;
+    if context.session_revoked_at.is_some()
+        || context.idle_expires_at <= now
+        || context.absolute_expires_at <= now
+    {
+        // A revoked or expired session is already terminal; the audit event is
+        // written only when this call actually ended a usable session.
+        transaction.rollback().await.ok();
+        return Ok(logout_response());
+    }
+
+    let session_id = context.token.session_id;
+    revoke_session_family(&mut transaction, session_id, REVOKE_REASON_LOGOUT)
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let event = with_user_agent(
+        AuditEvent::builder(
+            AuditAction::AuthnLogout,
+            AuditResult::Success,
+            AuditActor::user(context.user_id, context.username.clone()),
+            request_id.0,
+        )
+        .target(TargetType::Session, Some(session_id), None)
+        .detail("session_id", session_id.to_string()),
+        user_agent(&headers),
+    )
+    .build()
+    .map_err(audit_event_invalid)?;
+    services
+        .audit
+        .write_in_tx(&mut transaction, &event)
+        .await
+        .map_err(audit_unavailable)?;
+
+    transaction.commit().await.map_err(dependency_unavailable)?;
+    Ok(logout_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/logout-all",
+    tag = "Auth",
+    operation_id = "logoutAll",
+    security(("bearerAuth" = [])),
+    request_body = LogoutRequest,
+    responses(
+        (
+            status = 204,
+            description = "Every session revoked and the token version incremented; the refresh cookie is cleared",
+            headers(
+                ("Set-Cookie" = String, description = "Cleared host-only refresh cookie"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 401,
+            description = "Access token or session invalid",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("WWW-Authenticate" = String, description = "Bearer challenge"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 403,
+            description = "Account disabled or a password change is required",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 503,
+            description = "Authentication service unavailable",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
+pub async fn logout_all(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    principal: Authenticated,
+    ApiJson(_payload): ApiJson<LogoutRequest>,
+) -> Result<Response, ApiError> {
+    let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
+    if principal.user.must_change_password {
+        return Err(ApiError::new(ErrorCode::PasswordChangeRequired));
+    }
+    let user_agent = user_agent(&headers);
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    // Locking the user row serializes logout-all against concurrent logins:
+    // either their session commits before the sweep, or they read the bumped
+    // token version after it.
+    let locked = lock_user_row(&mut transaction, principal.user.id)
+        .await
+        .map_err(dependency_unavailable)?
+        .ok_or_else(ApiError::session_invalid)?;
+    if locked.token_version != principal.user.token_version {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    }
+    if !locked.is_active() {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::AccountDisabled));
+    }
+
+    let sessions_revoked =
+        revoke_user_sessions(&mut transaction, locked.id, REVOKE_REASON_LOGOUT_ALL)
+            .await
+            .map_err(dependency_unavailable)?;
+    revoke_user_refresh_tokens(&mut transaction, locked.id, REVOKE_REASON_LOGOUT_ALL)
+        .await
+        .map_err(dependency_unavailable)?;
+    bump_token_version(&mut transaction, locked.id)
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let event = with_user_agent(
+        AuditEvent::builder(
+            AuditAction::AuthnLogoutAll,
+            AuditResult::Success,
+            AuditActor::user(locked.id, locked.username.clone()),
+            request_id.0,
+        )
+        .target(
+            TargetType::User,
+            Some(locked.id),
+            Some(locked.username.clone()),
+        )
+        .detail("sessions_revoked_count", sessions_revoked as i64),
+        user_agent,
+    )
+    .build()
+    .map_err(audit_event_invalid)?;
+    services
+        .audit
+        .write_in_tx(&mut transaction, &event)
+        .await
+        .map_err(audit_unavailable)?;
+
+    transaction.commit().await.map_err(dependency_unavailable)?;
+    Ok(logout_response())
+}
+
+/// 204 with a cleared refresh cookie. Logout never returns a body.
+fn logout_response() -> Response {
+    (
+        StatusCode::NO_CONTENT,
+        [(SET_COOKIE, clear_refresh_cookie())],
+    )
+        .into_response()
+}
+
 /// Rotate an unused token: mark it used, link it to the HMAC-derived
 /// successor, persist the successor's SHA-256 and slide the idle deadline.
 /// Returns the raw successor; the caller commits.
@@ -845,14 +1078,7 @@ async fn reject_refresh_reuse(
     request_id: Uuid,
     user_agent: Option<String>,
 ) -> Result<ApiError, ApiError> {
-    revoke_refresh_family(
-        transaction,
-        context.token.session_id,
-        REVOKE_REASON_TOKEN_REUSE,
-    )
-    .await
-    .map_err(dependency_unavailable)?;
-    revoke_session(
+    revoke_session_family(
         transaction,
         context.token.session_id,
         REVOKE_REASON_TOKEN_REUSE,
@@ -994,7 +1220,7 @@ async fn complete_login(
         .await
         .map_err(dependency_unavailable)?;
 
-    let locked = lock_user_for_login(&mut transaction, user.id)
+    let locked = lock_user_row(&mut transaction, user.id)
         .await
         .map_err(dependency_unavailable)?
         .ok_or_else(ApiError::session_invalid)?;
@@ -1062,6 +1288,29 @@ async fn complete_login(
         return Err(ApiError::new(ErrorCode::TemporaryPasswordExpired));
     }
 
+    // Enforce the per-user session cap while the user row is locked, so two
+    // concurrent logins cannot both observe a free slot. Evicted sessions are
+    // revoked before the new one is inserted; their families die with them.
+    let active_sessions = count_active_sessions(&mut transaction, locked.id)
+        .await
+        .map_err(dependency_unavailable)?;
+    let excess = (active_sessions + 1 - MAX_ACTIVE_SESSIONS_PER_USER).max(0);
+    let mut evicted_sessions = Vec::new();
+    if excess > 0 {
+        evicted_sessions = find_oldest_active_sessions(&mut transaction, locked.id, excess)
+            .await
+            .map_err(dependency_unavailable)?;
+        for evicted_session_id in &evicted_sessions {
+            revoke_session_family(
+                &mut transaction,
+                *evicted_session_id,
+                REVOKE_REASON_EXCESS_SESSIONS,
+            )
+            .await
+            .map_err(dependency_unavailable)?;
+        }
+    }
+
     let idle_expires_at = authenticated_at + Duration::seconds(SESSION_IDLE_SECONDS);
     let absolute_expires_at = authenticated_at + Duration::seconds(SESSION_ABSOLUTE_SECONDS);
 
@@ -1103,6 +1352,28 @@ async fn complete_login(
         .await
         .map_err(dependency_unavailable)?;
     let effective = resolve_effective_permissions(&roles);
+
+    for evicted_session_id in &evicted_sessions {
+        let event = with_user_agent(
+            AuditEvent::builder(
+                AuditAction::AuthnSessionEvicted,
+                AuditResult::Success,
+                AuditActor::user(locked.id, locked.username.clone()),
+                request_id,
+            )
+            .target(TargetType::Session, Some(*evicted_session_id), None)
+            .detail("evicted_session_id", evicted_session_id.to_string())
+            .detail("new_session_id", session_id.to_string()),
+            user_agent.clone(),
+        )
+        .build()
+        .map_err(audit_event_invalid)?;
+        services
+            .audit
+            .write_in_tx(&mut transaction, &event)
+            .await
+            .map_err(audit_unavailable)?;
+    }
 
     let event = with_user_agent(
         AuditEvent::builder(

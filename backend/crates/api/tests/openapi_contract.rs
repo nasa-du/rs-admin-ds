@@ -186,6 +186,56 @@ fn refresh_is_documented_with_a_cookie_scheme_and_stable_operation_id() {
 }
 
 #[test]
+fn logout_operations_are_documented_with_stable_ids_and_their_auth_scheme() {
+    let doc = document();
+
+    let logout = &doc["paths"]["/api/v1/auth/logout"]["post"];
+    assert_eq!(logout["operationId"], "logout");
+    assert_eq!(logout["tags"][0], "Auth");
+    assert_eq!(
+        logout["security"][0]["refreshCookie"],
+        serde_json::json!([]),
+        "logout authenticates by cookie"
+    );
+    assert_eq!(
+        logout["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/LogoutRequest"
+    );
+    assert!(
+        logout["responses"]["204"].is_object(),
+        "logout documents the 204 outcome"
+    );
+    assert!(
+        logout["responses"]["204"]["headers"]["Set-Cookie"].is_object(),
+        "logout documents the cleared cookie"
+    );
+
+    let logout_all = &doc["paths"]["/api/v1/auth/logout-all"]["post"];
+    assert_eq!(logout_all["operationId"], "logoutAll");
+    assert_eq!(logout_all["tags"][0], "Auth");
+    assert_eq!(
+        logout_all["security"][0]["bearerAuth"],
+        serde_json::json!([]),
+        "logout-all authenticates by access token"
+    );
+    assert!(
+        logout_all["responses"]["204"]["headers"]["Set-Cookie"].is_object(),
+        "logout-all documents the cleared cookie"
+    );
+    for status in ["401", "403"] {
+        assert_eq!(
+            logout_all["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "response {status} must use the problem contract"
+        );
+    }
+    assert!(
+        logout_all["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+        "401 must document the Bearer challenge"
+    );
+}
+
+#[test]
 fn problem_details_and_the_closed_error_catalog_are_in_the_schema() {
     let doc = document();
     let schemas = &doc["components"]["schemas"];

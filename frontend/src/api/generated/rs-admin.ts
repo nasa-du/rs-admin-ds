@@ -25,6 +25,7 @@ import type {
   HealthStatus,
   LoginRequest,
   LoginResponse,
+  LogoutRequest,
   ProblemDetails,
   ReauthenticateRequest,
   ReauthenticateResponse,
@@ -133,6 +134,174 @@ export const useLogin = <TError = ProblemDetails, TContext = unknown>(
   TContext
 > => {
   return useMutation(getLoginMutationOptions(options), queryClient)
+}
+
+export const logout = (
+  logoutRequest: LogoutRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<void>(
+    {
+      url: `/api/v1/auth/logout`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: logoutRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getLogoutMutationKey = () => ['logout'] as const
+
+export const getLogoutMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof logout>>,
+    TError,
+    LogoutMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof logout>>,
+  TError,
+  LogoutMutationVariables,
+  TContext
+> => {
+  const mutationKey = getLogoutMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof logout>>,
+    LogoutMutationVariables
+  > = (props) => {
+    const { data } = props ?? {}
+
+    return logout(data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type LogoutMutationResult = NonNullable<
+  Awaited<ReturnType<typeof logout>>
+>
+export type LogoutMutationBody = LogoutRequest
+export type LogoutMutationError = ProblemDetails
+export type LogoutMutationVariables = { data: LogoutRequest }
+
+export const useLogout = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof logout>>,
+      TError,
+      LogoutMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof logout>>,
+  TError,
+  LogoutMutationVariables,
+  TContext
+> => {
+  return useMutation(getLogoutMutationOptions(options), queryClient)
+}
+
+export const logoutAll = (
+  logoutRequest: LogoutRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<void>(
+    {
+      url: `/api/v1/auth/logout-all`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: logoutRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getLogoutAllMutationKey = () => ['logoutAll'] as const
+
+export const getLogoutAllMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof logoutAll>>,
+    TError,
+    LogoutAllMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof logoutAll>>,
+  TError,
+  LogoutAllMutationVariables,
+  TContext
+> => {
+  const mutationKey = getLogoutAllMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof logoutAll>>,
+    LogoutAllMutationVariables
+  > = (props) => {
+    const { data } = props ?? {}
+
+    return logoutAll(data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type LogoutAllMutationResult = NonNullable<
+  Awaited<ReturnType<typeof logoutAll>>
+>
+export type LogoutAllMutationBody = LogoutRequest
+export type LogoutAllMutationError = ProblemDetails
+export type LogoutAllMutationVariables = { data: LogoutRequest }
+
+export const useLogoutAll = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof logoutAll>>,
+      TError,
+      LogoutAllMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof logoutAll>>,
+  TError,
+  LogoutAllMutationVariables,
+  TContext
+> => {
+  return useMutation(getLogoutAllMutationOptions(options), queryClient)
 }
 
 export const getMe = (

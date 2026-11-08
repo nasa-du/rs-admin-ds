@@ -197,9 +197,10 @@ pub async fn find_user_by_id(
     .map_err(AuthStoreError::Database)
 }
 
-/// Lock the user row for the rest of the login transaction. Serializing logins
-/// per user keeps the token version and session cap checks consistent.
-pub async fn lock_user_for_login(
+/// Lock the user row for the rest of the transaction. Serializing logins,
+/// reauthentication and logout-all per user keeps the token version and
+/// session cap checks consistent.
+pub async fn lock_user_row(
     transaction: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
 ) -> Result<Option<AuthUser>, AuthStoreError> {
@@ -211,6 +212,51 @@ pub async fn lock_user_for_login(
     )
     .bind(user_id)
     .fetch_optional(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Count a user's usable sessions: unrevoked and not yet idle- or
+/// absolute-expired. This is the value the per-user session cap is enforced
+/// against, matching the "active" state in the session state machine.
+pub async fn count_active_sessions(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<i64, AuthStoreError> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM auth_sessions
+         WHERE user_id = $1
+           AND revoked_at IS NULL
+           AND idle_expires_at > now()
+           AND absolute_expires_at > now()",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
+}
+
+/// Ids of the user's least recently active usable sessions, oldest first.
+/// Callers hold the user row lock, so the selection cannot race a login.
+/// Expired sessions are not candidates: the state machine already treats them
+/// as terminal. UUIDv7 ids break ties so the order is stable.
+pub async fn find_oldest_active_sessions(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    limit: i64,
+) -> Result<Vec<Uuid>, AuthStoreError> {
+    sqlx::query_scalar(
+        "SELECT id FROM auth_sessions
+         WHERE user_id = $1
+           AND revoked_at IS NULL
+           AND idle_expires_at > now()
+           AND absolute_expires_at > now()
+         ORDER BY last_seen_at, id
+         LIMIT $2",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(&mut **transaction)
     .await
     .map_err(AuthStoreError::Database)
 }
@@ -364,6 +410,16 @@ pub async fn mark_refresh_token_rotated(
 /// (spec §5.3).
 pub const REVOKE_REASON_TOKEN_REUSE: &str = "token_reuse";
 
+/// Revocation reason for a user ending their current session (spec §5.9).
+pub const REVOKE_REASON_LOGOUT: &str = "logout";
+
+/// Revocation reason for a user ending every session they own (spec §5.9).
+pub const REVOKE_REASON_LOGOUT_ALL: &str = "logout_all";
+
+/// Revocation reason for a session pushed out by the per-user session cap
+/// (spec §5.3).
+pub const REVOKE_REASON_EXCESS_SESSIONS: &str = "excess_sessions";
+
 /// Revoke every token in a session's family with the given reason.
 pub async fn revoke_refresh_family(
     transaction: &mut Transaction<'_, Postgres>,
@@ -401,6 +457,75 @@ pub async fn revoke_session(
     .await
     .map_err(AuthStoreError::Database)?;
     Ok(result.rows_affected() == 1)
+}
+
+/// Revoke a session together with every refresh token in its family. Returns
+/// whether this call was the one that revoked the session.
+pub async fn revoke_session_family(
+    transaction: &mut Transaction<'_, Postgres>,
+    session_id: Uuid,
+    reason: &str,
+) -> Result<bool, AuthStoreError> {
+    revoke_refresh_family(transaction, session_id, reason).await?;
+    revoke_session(transaction, session_id, reason).await
+}
+
+/// Revoke every unrevoked session a user owns and return how many changed
+/// state. Callers must hold the user row lock so a concurrent login cannot
+/// create a session between this sweep and the token-version bump.
+pub async fn revoke_user_sessions(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    reason: &str,
+) -> Result<u64, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_sessions
+         SET revoked_at = now(), revoke_reason = $2
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected())
+}
+
+/// Revoke every unrevoked refresh token belonging to a user's sessions.
+pub async fn revoke_user_refresh_tokens(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    reason: &str,
+) -> Result<u64, AuthStoreError> {
+    let result = sqlx::query(
+        "UPDATE auth_refresh_tokens t
+         SET revoked_at = now(), revoked_reason = $2
+         FROM auth_sessions s
+         WHERE t.session_id = s.id AND s.user_id = $1 AND t.revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(reason)
+    .execute(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)?;
+    Ok(result.rows_affected())
+}
+
+/// Increment `users.token_version`, invalidating every access token issued so
+/// far for the user. Returns the new version.
+pub async fn bump_token_version(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> Result<i64, AuthStoreError> {
+    sqlx::query_scalar(
+        "UPDATE users SET token_version = token_version + 1, updated_at = now()
+         WHERE id = $1
+         RETURNING token_version",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(AuthStoreError::Database)
 }
 
 /// Stamp a session's activity and slide its idle deadline. Callers apply the

@@ -208,6 +208,20 @@ pub fn refresh_request(raw: Option<&str>) -> Request<Body> {
     builder.body(Body::from("{}")).expect("refresh request")
 }
 
+/// `POST /auth/logout` with the raw token carried in the cookie header. Logout
+/// authenticates by cookie only; the access token is intentionally absent.
+pub fn logout_request(raw: Option<&str>) -> Request<Body> {
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/logout")
+        .header(header::CONTENT_TYPE, "application/json");
+    let builder = match raw {
+        Some(raw) => builder.header(header::COOKIE, format!("__Host-refresh={raw}")),
+        None => builder,
+    };
+    builder.body(Body::from("{}")).expect("logout request")
+}
+
 pub fn authorized_request(
     method: &str,
     uri: &str,

@@ -88,6 +88,8 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
     // unauthenticated JSON parsing (spec §8.1).
     let auth = OpenApiRouter::new()
         .routes(routes!(crate::auth::login))
+        .routes(routes!(crate::auth::logout))
+        .routes(routes!(crate::auth::logout_all))
         .routes(routes!(crate::auth::refresh))
         .routes(routes!(crate::auth::get_me))
         .routes(routes!(crate::auth::reauthenticate))

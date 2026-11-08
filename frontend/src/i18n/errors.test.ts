@@ -58,6 +58,9 @@ describe('error code translation', () => {
     expect(translateErrorCode(t, 'internal_error')).toBe(
       'An internal server error occurred. Please try again later.'
     )
+    expect(translateErrorCode(t, 'network_error')).toBe(
+      'The network request failed. Check your connection and try again.'
+    )
   })
 
   it('uses the auth copy for rate limiting only in an auth context', () => {

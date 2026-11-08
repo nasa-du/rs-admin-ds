@@ -30,6 +30,11 @@ export type ApiErrorOptions = {
 export class ApiError extends Error {
   readonly problem: ProblemDetails
   readonly retryAfterSeconds: number | null
+  /**
+   * Set once the error has produced a user-visible prompt. Global error
+   * handlers use it to avoid repeating the same toast (ADR-0006 §3).
+   */
+  handled = false
 
   constructor(problem: ProblemDetails, options: ApiErrorOptions = {}) {
     super(problem.title ?? problem.detail ?? problem.code)
@@ -72,20 +77,90 @@ function isProblemDetails(value: unknown): value is ProblemDetails {
 export function toApiError(error: unknown): ApiError | null {
   if (error instanceof ApiError) return error
 
+  // Axios errors also carry a string `code` (e.g. `ERR_NETWORK`), so check the
+  // response shape before the raw ProblemDetails shape.
+  if (isRecord(error) && isRecord(error.response)) {
+    return fromResponse(error.response)
+  }
+
+  if (isRecord(error) && error.isAxiosError === true) {
+    if (error.code === 'ERR_CANCELED') return null
+    return new ApiError({
+      code: 'network_error',
+      title: typeof error.message === 'string' ? error.message : undefined,
+    })
+  }
+
   if (isProblemDetails(error)) {
     return new ApiError(error)
   }
 
-  if (
-    isRecord(error) &&
-    isRecord(error.response) &&
-    isProblemDetails(error.response.data)
-  ) {
-    const retryAfter = getRetryAfterHeader(error.response.headers)
-    return new ApiError(error.response.data, { retryAfterSeconds: retryAfter })
+  return null
+}
+
+function fromResponse(response: Record<string, unknown>): ApiError | null {
+  const retryAfter = getRetryAfterHeader(response.headers)
+  const requestId = getHeader(response.headers, 'x-request-id')
+
+  if (isProblemDetails(response.data)) {
+    return new ApiError(
+      {
+        ...response.data,
+        request_id:
+          response.data.request_id ??
+          (typeof requestId === 'string' ? requestId : undefined),
+      },
+      { retryAfterSeconds: retryAfter }
+    )
   }
 
-  return null
+  const status = Number(response.status)
+  if (!Number.isInteger(status) || status < 400) return null
+
+  return new ApiError(
+    {
+      code: fallbackCodeForStatus(status),
+      status,
+      title:
+        typeof response.statusText === 'string'
+          ? response.statusText
+          : undefined,
+      request_id: typeof requestId === 'string' ? requestId : undefined,
+    },
+    { retryAfterSeconds: retryAfter }
+  )
+}
+
+/**
+ * Status-code fallback for responses that are not ProblemDetails (gateway
+ * HTML, proxy errors). Codes are stable catalog values so the i18n mapper
+ * still produces a localized message.
+ */
+function fallbackCodeForStatus(status: number): string {
+  switch (status) {
+    case 400:
+    case 409:
+    case 422:
+      return 'validation_failed'
+    case 401:
+      return 'access_token_invalid'
+    case 403:
+      return 'forbidden'
+    case 404:
+      return 'not_found'
+    case 405:
+      return 'method_not_allowed'
+    case 413:
+      return 'payload_too_large'
+    case 415:
+      return 'unsupported_media_type'
+    case 429:
+      return 'rate_limited'
+    case 500:
+      return 'internal_error'
+    default:
+      return status >= 500 ? 'service_unavailable' : 'validation_failed'
+  }
 }
 
 function getHeader(

@@ -1,5 +1,6 @@
 import i18n from '@/i18n'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from './api-error'
 import { handleServerError } from './handle-server-error'
 
 const toastError = vi.hoisted(() => vi.fn())
@@ -43,6 +44,15 @@ describe('handleServerError', () => {
     expect(toastError).toHaveBeenCalledWith(
       'Built-in roles cannot be modified.'
     )
+  })
+
+  it('does not repeat a prompt already surfaced by the API client', () => {
+    const error = new ApiError({ code: 'account_disabled', status: 403 })
+    error.handled = true
+
+    handleServerError(error)
+
+    expect(toastError).not.toHaveBeenCalled()
   })
 
   it('falls back to the unexpected message for unknown codes', () => {

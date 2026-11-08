@@ -124,7 +124,12 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
     let users = OpenApiRouter::new()
         .routes(routes!(crate::users::list_users))
         .routes(routes!(crate::users::create_user))
-        .routes(routes!(crate::users::get_user, crate::users::update_user));
+        .routes(routes!(crate::users::get_user, crate::users::update_user))
+        .routes(routes!(crate::users_lifecycle::set_user_roles))
+        .routes(routes!(crate::users_lifecycle::set_user_status))
+        .routes(routes!(crate::users_lifecycle::reset_user_password))
+        .routes(routes!(crate::users_lifecycle::unlock_user))
+        .routes(routes!(crate::users_lifecycle::revoke_user_sessions));
 
     OpenApiRouter::new()
         .routes(routes!(health_live))

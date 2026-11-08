@@ -454,8 +454,12 @@ pub const REVOKE_REASON_EXCESS_SESSIONS: &str = "excess_sessions";
 /// password (spec §5.3, §5.9).
 pub const REVOKE_REASON_PASSWORD_CHANGE: &str = "password_change";
 
-/// Revocation reason for an administrative sweep: disabling, credential reset
-/// and the CLI commands (spec §5.9).
+/// Revocation reason for disconnecting a user whose account was disabled
+/// (spec §5.9).
+pub const REVOKE_REASON_ACCOUNT_DISABLED: &str = "account_disabled";
+
+/// Revocation reason for an administrative sweep: credential reset, the
+/// explicit sessions endpoint and the CLI commands (spec §5.9).
 pub const REVOKE_REASON_ADMIN_REVOKE: &str = "admin_revoke";
 
 /// Revoke every token in a session's family with the given reason.

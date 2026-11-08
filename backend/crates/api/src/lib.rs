@@ -18,6 +18,7 @@ mod query;
 mod roles;
 mod router;
 mod users;
+mod users_lifecycle;
 mod wire;
 
 pub use auth::{AuthServiceError, AuthServices};

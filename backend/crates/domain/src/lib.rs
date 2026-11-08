@@ -1,6 +1,7 @@
 //! Pure domain types. This crate must not depend on HTTP, SQLx or Axum.
 
 pub mod identity;
+pub mod lifecycle;
 pub mod permission;
 pub mod rbac;
 

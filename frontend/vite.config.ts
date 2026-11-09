@@ -22,7 +22,34 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['zustand'],
+    // Pre-bundle the UI/test runtime up front. Without this, the first test
+    // run after a fresh install discovers dependencies mid-run and reloads
+    // Vite, which can leave a test with a second React copy.
+    include: [
+      'zustand',
+      'axios',
+      'zod',
+      'react-hook-form',
+      '@hookform/resolvers/zod',
+      '@tanstack/react-query',
+      '@tanstack/react-router',
+      '@tanstack/react-table',
+      '@radix-ui/react-avatar',
+      '@radix-ui/react-checkbox',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-label',
+      '@radix-ui/react-popover',
+      '@radix-ui/react-radio-group',
+      '@radix-ui/react-scroll-area',
+      '@radix-ui/react-select',
+      '@radix-ui/react-separator',
+      '@radix-ui/react-tooltip',
+      'cmdk',
+      'lucide-react',
+      'sonner',
+      'vitest-browser-react',
+    ],
   },
   server: {
     // Keep local development same-origin: the API client uses relative paths

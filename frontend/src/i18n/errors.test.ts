@@ -156,6 +156,28 @@ describe('field error translation', () => {
     })
   })
 
+  it('maps a login-identifier conflict to the field', () => {
+    expect(
+      translateFieldError(t, {
+        pointer: '/username',
+        code: 'identifier_taken',
+      })
+    ).toEqual({
+      field: 'username',
+      message: 'This login identifier is already taken.',
+    })
+  })
+
+  it('maps phone and backend length codes used by user management', () => {
+    expect(pointerToFieldName('/phone')).toBe('phone')
+    expect(
+      translateFieldError(t, {
+        pointer: '/display_name',
+        code: 'invalid_length',
+      })
+    ).toEqual({ field: 'displayName', message: 'The value is invalid.' })
+  })
+
   it('falls back for unknown field codes', () => {
     expect(
       translateFieldError(t, {

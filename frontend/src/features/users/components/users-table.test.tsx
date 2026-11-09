@@ -84,6 +84,7 @@ function renderTable(
       onSortingChange={vi.fn()}
       onOpenUser={vi.fn()}
       onEditUser={vi.fn()}
+      onAssignRoles={vi.fn()}
       onRefresh={vi.fn()}
       onRetry={vi.fn()}
       onClearFilters={vi.fn()}
@@ -187,6 +188,38 @@ describe('UsersTable', () => {
       .not.toBeInTheDocument()
   })
 
+  it('opens role assignment from the row menu with users.assign_role and roles.read', async () => {
+    const onAssignRoles = vi.fn()
+    const screen = await renderTable({
+      currentUser: {
+        ...ADMIN,
+        is_super_admin: false,
+        permissions: ['users.read', 'users.assign_role', 'roles.read'],
+      },
+      onAssignRoles,
+    })
+
+    await expect
+      .element(screen.getByText(i18n.t('users:columns.actions')))
+      .toBeInTheDocument()
+
+    await userEvent.click(
+      screen
+        .getByRole('button', {
+          name: i18n.t('users:actions.more'),
+          exact: true,
+        })
+        .first()
+    )
+    await userEvent.click(
+      screen.getByRole('menuitem', {
+        name: i18n.t('users:manage.assignRoles.action'),
+      })
+    )
+
+    expect(onAssignRoles).toHaveBeenCalledWith(PAGE.items[0])
+  })
+
   it('shows a skeleton while the first page loads', async () => {
     const screen = await renderTable({
       data: undefined,
@@ -230,6 +263,7 @@ describe('UsersTable', () => {
         onSortingChange={vi.fn()}
         onOpenUser={vi.fn()}
         onEditUser={vi.fn()}
+        onAssignRoles={vi.fn()}
         onRefresh={vi.fn()}
         onRetry={vi.fn()}
         onClearFilters={onClearFilters}

@@ -104,7 +104,7 @@
     "roleSelected_one": "{{count}} selected",
     "roleSelected_other": "{{count}} selected",
     "roleBaseline": "Baseline",
-    "roleNotAssignable": "You cannot grant this role.",
+    "roleNotAssignable": "This role exceeds your effective permissions.",
     "rolePrivilegedOnly": "Only super admins can grant this role.",
     "rolePrivilegedWarning": "This selection grants an administrative role.",
     "submit": "Create user",
@@ -150,6 +150,55 @@
     "copyId": "Copy user ID",
     "idCopied": "User ID copied.",
     "copyFailed": "Could not copy."
+  },
+  "manage": {
+    "assignRoles": {
+      "action": "Assign roles",
+      "title": "Assign roles",
+      "description": "Choose the roles for {{username}}. The baseline user role is always kept.",
+      "privilegedChange": "This change alters whether the user holds an administrative role.",
+      "submit": "Save roles",
+      "submitting": "Saving...",
+      "success": "Roles updated."
+    },
+    "resetPassword": {
+      "action": "Reset password",
+      "title": "Reset password",
+      "description": "Issue a new temporary password for {{username}}.",
+      "consequences": "This signs the user out of all devices immediately. They must change the password at their next sign-in, and the temporary password expires in 72 hours.",
+      "passwordMode": "Temporary password",
+      "generate": "Generate automatically",
+      "generateHint": "The server generates a 24-character temporary password.",
+      "manual": "Set manually",
+      "manualHint": "15–128 characters. The server rejects common passwords and passwords equal to an identifier.",
+      "password": "Temporary password",
+      "confirmPassword": "Confirm password",
+      "submit": "Reset password",
+      "submitting": "Resetting...",
+      "success": "Temporary password issued.",
+      "issuedTitle": "Temporary password issued",
+      "issuedDescription": "Share this temporary password with {{username}} through a secure channel."
+    },
+    "unlock": {
+      "action": "Unlock user",
+      "success": "User unlocked."
+    },
+    "status": {
+      "disableAction": "Disable user",
+      "enableAction": "Enable user",
+      "disableTitle": "Disable user {{username}}?",
+      "disableDescription": "The user will be signed out of all devices and cannot sign in. Their profile, roles and audit records are kept and can be re-enabled at any time.",
+      "disableConfirm": "Disable",
+      "disableSuccess": "User disabled.",
+      "enableSuccess": "User enabled."
+    },
+    "revokeSessions": {
+      "action": "Revoke all sessions",
+      "title": "Revoke all sessions for {{username}}?",
+      "description": "The user will be signed out of all devices immediately and must sign in again.",
+      "confirm": "Revoke sessions",
+      "success": "All sessions revoked."
+    }
   },
   "password": {
     "createdTitle": "User created",

@@ -101,7 +101,7 @@
     "rolePermissionCount_other": "{{count}} 项权限",
     "roleSelected_other": "已选 {{count}} 项",
     "roleBaseline": "基线",
-    "roleNotAssignable": "你不能授予该角色。",
+    "roleNotAssignable": "该角色超出你的有效权限。",
     "rolePrivilegedOnly": "仅超级管理员可授予该角色。",
     "rolePrivilegedWarning": "当前选择将授予管理角色。",
     "submit": "创建用户",
@@ -147,6 +147,55 @@
     "copyId": "复制用户 ID",
     "idCopied": "用户 ID 已复制。",
     "copyFailed": "复制失败。"
+  },
+  "manage": {
+    "assignRoles": {
+      "action": "分配角色",
+      "title": "分配角色",
+      "description": "为 {{username}} 选择角色。基线 user 角色始终保留。",
+      "privilegedChange": "该变更会改变用户是否持有管理角色。",
+      "submit": "保存角色",
+      "submitting": "正在保存...",
+      "success": "角色已更新。"
+    },
+    "resetPassword": {
+      "action": "重置密码",
+      "title": "重置密码",
+      "description": "为 {{username}} 签发新的临时密码。",
+      "consequences": "该用户会立即退出所有设备。下次登录时必须更改密码，临时密码 72 小时后失效。",
+      "passwordMode": "临时密码",
+      "generate": "自动生成",
+      "generateHint": "服务器会生成 24 位临时密码。",
+      "manual": "手动设置",
+      "manualHint": "15–128 个字符。服务器会拒绝常见密码以及与登录标识相同的密码。",
+      "password": "临时密码",
+      "confirmPassword": "确认密码",
+      "submit": "重置密码",
+      "submitting": "正在重置...",
+      "success": "临时密码已签发。",
+      "issuedTitle": "临时密码已签发",
+      "issuedDescription": "请通过安全渠道将临时密码交付给 {{username}}。"
+    },
+    "unlock": {
+      "action": "解锁用户",
+      "success": "用户已解锁。"
+    },
+    "status": {
+      "disableAction": "停用用户",
+      "enableAction": "启用用户",
+      "disableTitle": "停用用户 {{username}}？",
+      "disableDescription": "停用后该用户会立即退出所有设备并无法登录；资料、角色与审计记录会保留，可随时重新启用。",
+      "disableConfirm": "停用",
+      "disableSuccess": "用户已停用。",
+      "enableSuccess": "用户已启用。"
+    },
+    "revokeSessions": {
+      "action": "撤销全部会话",
+      "title": "撤销 {{username}} 的全部会话？",
+      "description": "该用户会立即退出所有设备并需要重新登录。",
+      "confirm": "撤销会话",
+      "success": "已撤销全部会话。"
+    }
   },
   "password": {
     "createdTitle": "用户已创建",

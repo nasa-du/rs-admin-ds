@@ -16,6 +16,7 @@ import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { Can } from '@/features/auth/can'
 import { useAuth } from '@/features/auth/use-auth'
+import { AssignRolesDialog } from './components/assign-roles-dialog'
 import { UserCreateDialog } from './components/user-create-dialog'
 import { UserDetailSheet } from './components/user-detail-sheet'
 import { UserEditDialog } from './components/user-edit-dialog'
@@ -50,6 +51,8 @@ export function Users() {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<UserSummary | null>(null)
+  const [assigningRolesUser, setAssigningRolesUser] =
+    useState<UserSummary | null>(null)
 
   const params = useMemo(() => toListUsersParams(search), [search])
   const listQuery = useListUsers(params, {
@@ -185,6 +188,7 @@ export function Users() {
           onSortingChange={handleSortingChange}
           onOpenUser={openUser}
           onEditUser={setEditingUser}
+          onAssignRoles={setAssigningRolesUser}
           onRefresh={() => void listQuery.refetch()}
           onRetry={() => void listQuery.refetch()}
           onClearFilters={clearFilters}
@@ -217,6 +221,17 @@ export function Users() {
           currentUser={currentUser}
           onOpenChange={(open) => {
             if (!open) setEditingUser(null)
+          }}
+        />
+      )}
+
+      {assigningRolesUser && (
+        <AssignRolesDialog
+          open
+          user={assigningRolesUser}
+          currentUser={currentUser}
+          onOpenChange={(open) => {
+            if (!open) setAssigningRolesUser(null)
           }}
         />
       )}

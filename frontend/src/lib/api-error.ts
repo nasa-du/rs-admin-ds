@@ -74,6 +74,15 @@ function isProblemDetails(value: unknown): value is ProblemDetails {
  * - a raw ProblemDetails object
  * - an axios-style error with `response.data` ProblemDetails
  */
+/**
+ * Mark an error as already surfaced so global handlers skip the duplicate
+ * toast (ADR-0006 §3).
+ */
+export function markApiErrorHandled(error: unknown): void {
+  const normalized = toApiError(error)
+  if (normalized instanceof ApiError) normalized.handled = true
+}
+
 export function toApiError(error: unknown): ApiError | null {
   if (error instanceof ApiError) return error
 

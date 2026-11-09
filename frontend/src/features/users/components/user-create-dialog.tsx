@@ -46,17 +46,10 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { PasswordInput } from '@/components/password-input'
 import { runWithReauth } from '@/features/auth/reauth/reauth'
 import { ReauthCancelledError } from '@/features/auth/reauth/reauth-controller'
+import { validateManualPassword } from '../password-policy'
 import { normalizeEmail, normalizeUsername } from '../users-form'
 import { RoleMultiSelect } from './role-multi-select'
 import { TemporaryPasswordPanel } from './temporary-password-panel'
-
-const MIN_PASSWORD_LENGTH = 15
-const MAX_PASSWORD_LENGTH = 128
-
-/** The server counts NFC-normalized Unicode code points (security policy). */
-function passwordLength(password: string): number {
-  return Array.from(password.normalize('NFC')).length
-}
 
 const DEFAULT_VALUES = {
   username: '',
@@ -81,38 +74,7 @@ function makeCreateUserSchema(t: TFunction<'validation'>) {
       confirmPassword: z.string(),
       roleIds: z.array(z.string()),
     })
-    .superRefine((values, ctx) => {
-      if (values.passwordMode !== 'manual') return
-
-      const length = passwordLength(values.password)
-      if (values.password === '') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['password'],
-          message: t('required'),
-        })
-      } else if (length < MIN_PASSWORD_LENGTH) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['password'],
-          message: t('min_length', { min: MIN_PASSWORD_LENGTH }),
-        })
-      } else if (length > MAX_PASSWORD_LENGTH) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['password'],
-          message: t('max_length', { max: MAX_PASSWORD_LENGTH }),
-        })
-      }
-
-      if (values.confirmPassword !== values.password) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['confirmPassword'],
-          message: t('passwordMismatch'),
-        })
-      }
-    })
+    .superRefine((values, ctx) => validateManualPassword(values, ctx, t))
 }
 
 type CreateUserFormValues = z.infer<ReturnType<typeof makeCreateUserSchema>>

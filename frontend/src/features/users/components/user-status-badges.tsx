@@ -1,16 +1,11 @@
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
+import { isAccountLocked } from '../account-status'
 
 type UserStatusBadgesProps = {
   status: string
   lockedUntil?: string | null
   mustChangePassword: boolean
-}
-
-function isLocked(lockedUntil: string | null | undefined): boolean {
-  if (!lockedUntil) return false
-  const value = new Date(lockedUntil).getTime()
-  return !Number.isNaN(value) && value > Date.now()
 }
 
 /** Status badge plus the independent lock and password-change markers. */
@@ -26,7 +21,7 @@ export function UserStatusBadges({
       <Badge variant={status === 'active' ? 'default' : 'secondary'}>
         {status === 'disabled' ? t('status.disabled') : t('status.active')}
       </Badge>
-      {isLocked(lockedUntil) && (
+      {isAccountLocked(lockedUntil) && (
         <Badge variant='outline' className='text-destructive'>
           {t('status.locked')}
         </Badge>

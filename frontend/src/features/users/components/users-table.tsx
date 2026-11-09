@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   MoreHorizontal,
   Pencil,
+  Shield,
   Users as UsersIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -41,12 +42,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { ApiErrorAlert } from '@/components/api-error-alert'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
@@ -57,6 +52,7 @@ import {
   sortingFromSearch,
   type UsersSearch,
 } from '../users-search'
+import { DisabledTooltip } from './disabled-tooltip'
 import { UserRoleChips } from './user-role-chips'
 import { UserStatusBadges } from './user-status-badges'
 import { UsersToolbar } from './users-toolbar'
@@ -78,6 +74,7 @@ type UsersTableProps = {
   onSortingChange: (next: SortingState) => void
   onOpenUser: (id: string) => void
   onEditUser: (user: UserSummary) => void
+  onAssignRoles: (user: UserSummary) => void
   onRefresh: () => void
   onRetry: () => void
   onClearFilters: () => void
@@ -104,6 +101,7 @@ export function UsersTable({
   onSortingChange,
   onOpenUser,
   onEditUser,
+  onAssignRoles,
   onRefresh,
   onRetry,
   onClearFilters,
@@ -114,6 +112,8 @@ export function UsersTable({
 
   const canUpdate = hasPermission(currentUser, 'users.update')
   const canReadRoles = hasPermission(currentUser, 'roles.read')
+  const canAssignRoles =
+    hasPermission(currentUser, 'users.assign_role') && canReadRoles
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
     phone: false,
     updated_at: false,
@@ -267,7 +267,7 @@ export function UsersTable({
       },
     ]
 
-    if (canUpdate) {
+    if (canUpdate || canAssignRoles) {
       base.push({
         id: 'actions',
         header: t('columns.actions'),
@@ -275,7 +275,10 @@ export function UsersTable({
           <UserRowActions
             user={row.original}
             currentUser={currentUser}
+            canEdit={canUpdate}
+            canAssignRoles={canAssignRoles}
             onEdit={onEditUser}
+            onAssignRoles={onAssignRoles}
           />
         ),
         meta: { title: t('columns.actions') },
@@ -285,7 +288,7 @@ export function UsersTable({
     }
 
     return base
-  }, [t, canUpdate, currentUser, onEditUser])
+  }, [t, canUpdate, canAssignRoles, currentUser, onEditUser, onAssignRoles])
 
   const table = useReactTable({
     data: data?.items ?? [],
@@ -483,21 +486,21 @@ export function UsersTable({
 function UserRowActions({
   user,
   currentUser,
+  canEdit,
+  canAssignRoles,
   onEdit,
+  onAssignRoles,
 }: {
   user: UserSummary
   currentUser: UserSelfResponse | null
+  canEdit: boolean
+  canAssignRoles: boolean
   onEdit: (user: UserSummary) => void
+  onAssignRoles: (user: UserSummary) => void
 }) {
   const { t } = useTranslation('users')
   const isSelf = currentUser?.id === user.id
-
-  const editItem = (
-    <DropdownMenuItem disabled={isSelf} onSelect={() => onEdit(user)}>
-      <Pencil className='size-4' />
-      {t('actions.edit')}
-    </DropdownMenuItem>
-  )
+  const selfReason = isSelf ? t('edit.self') : undefined
 
   return (
     <DropdownMenu modal={false}>
@@ -517,17 +520,24 @@ function UserRowActions({
         align='end'
         onClick={(event) => event.stopPropagation()}
       >
-        {isSelf ? (
-          <TooltipProvider delayDuration={0}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className='block'>{editItem}</span>
-              </TooltipTrigger>
-              <TooltipContent side='left'>{t('edit.self')}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : (
-          editItem
+        {canEdit && (
+          <DisabledTooltip reason={selfReason}>
+            <DropdownMenuItem disabled={isSelf} onSelect={() => onEdit(user)}>
+              <Pencil className='size-4' />
+              {t('actions.edit')}
+            </DropdownMenuItem>
+          </DisabledTooltip>
+        )}
+        {canAssignRoles && (
+          <DisabledTooltip reason={selfReason}>
+            <DropdownMenuItem
+              disabled={isSelf}
+              onSelect={() => onAssignRoles(user)}
+            >
+              <Shield className='size-4' />
+              {t('manage.assignRoles.action')}
+            </DropdownMenuItem>
+          </DisabledTooltip>
         )}
       </DropdownMenuContent>
     </DropdownMenu>

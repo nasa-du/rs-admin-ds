@@ -37,6 +37,11 @@ type RoleMultiSelectProps = {
   onRetry?: () => void
   error?: string | null
   disabled?: boolean
+  /**
+   * Replaces the built-in privileged-role banner. Pass `null` to suppress it
+   * when the parent decides a different condition applies.
+   */
+  privilegedWarning?: string | null
 }
 
 /**
@@ -54,6 +59,7 @@ export function RoleMultiSelect({
   onRetry,
   error,
   disabled = false,
+  privilegedWarning,
 }: RoleMultiSelectProps) {
   const { t } = useTranslation('users')
   const { t: tRoles } = useTranslation('roles')
@@ -75,6 +81,13 @@ export function RoleMultiSelect({
     const role = roles.find((candidate) => candidate.id === id)
     return role ? isPrivilegedRole(role) : false
   })
+
+  const warning =
+    privilegedWarning !== undefined
+      ? privilegedWarning
+      : privilegedSelected
+        ? t('create.rolePrivilegedWarning')
+        : null
 
   function disabledReason(role: RoleSummary): string | null {
     if (role.assignable) return null
@@ -170,12 +183,12 @@ export function RoleMultiSelect({
         </>
       )}
 
-      {privilegedSelected && (
+      {warning && (
         <div
           role='status'
           className='rounded-md border border-amber-500/50 bg-amber-500/10 p-2 text-xs'
         >
-          {t('create.rolePrivilegedWarning')}
+          {warning}
         </div>
       )}
     </div>

@@ -11,19 +11,13 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
-  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { ApiErrorAlert } from '@/components/api-error-alert'
 import { copyToClipboard } from '../copy-to-clipboard'
+import { UserDetailActions } from './user-detail-actions'
 import { UserRoleChips } from './user-role-chips'
 import { UserStatusBadges } from './user-status-badges'
 
@@ -62,7 +56,6 @@ export function UserDetailSheet({
   if (!userId) return null
 
   const detail = query.data
-  const isSelf = Boolean(detail && currentUser?.id === detail.id)
 
   async function copyId(id: string) {
     if (await copyToClipboard(id)) {
@@ -218,27 +211,13 @@ export function UserDetailSheet({
           </div>
         ) : null}
 
-        {detail && canEdit && (
-          <SheetFooter>
-            {isSelf ? (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0}>
-                      <Button type='button' disabled>
-                        {t('detail.edit')}
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>{t('edit.self')}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            ) : (
-              <Button type='button' onClick={() => onEdit(detail)}>
-                {t('detail.edit')}
-              </Button>
-            )}
-          </SheetFooter>
+        {detail && (
+          <UserDetailActions
+            user={detail}
+            currentUser={currentUser}
+            canEdit={canEdit}
+            onEdit={onEdit}
+          />
         )}
       </SheetContent>
     </Sheet>

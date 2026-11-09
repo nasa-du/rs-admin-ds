@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import i18n from '@/i18n'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
@@ -73,14 +74,23 @@ function renderSheet({
   canEdit?: boolean
   currentUser?: UserSelfResponse | null
 } = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+
   return render(
-    <UserDetailSheet
-      userId={userId}
-      onClose={onClose}
-      onEdit={onEdit}
-      canEdit={canEdit}
-      currentUser={currentUser}
-    />
+    <QueryClientProvider client={queryClient}>
+      <UserDetailSheet
+        userId={userId}
+        onClose={onClose}
+        onEdit={onEdit}
+        canEdit={canEdit}
+        currentUser={currentUser}
+      />
+    </QueryClientProvider>
   )
 }
 

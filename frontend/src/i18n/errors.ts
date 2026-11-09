@@ -74,8 +74,10 @@ export const FIELD_CODE_KEYS = {
   invalid_format: 'validation:invalid_format',
   invalid_email: 'validation:invalid_email',
   invalid_url: 'validation:invalid_url',
+  invalid_length: 'validation:invalid',
   min_length: 'validation:min_length',
   max_length: 'validation:max_length',
+  identifier_taken: 'errors:user.identifier_taken',
 } as const
 
 type FieldTranslationKey =
@@ -143,6 +145,7 @@ const FIELD_ROOT_NAMES = new Set([
   'username',
   'email',
   'display_name',
+  'phone',
   'bio',
   'urls',
   'name',

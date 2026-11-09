@@ -1,5 +1,10 @@
 {
   "title": "角色",
+  "builtin": {
+    "super_admin": "超级管理员",
+    "admin": "管理员",
+    "user": "用户"
+  },
   "description": "管理角色与权限。",
   "new": {
     "title": "新建角色",

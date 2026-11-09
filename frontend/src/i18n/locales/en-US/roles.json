@@ -1,5 +1,10 @@
 {
   "title": "Roles",
+  "builtin": {
+    "super_admin": "Super admin",
+    "admin": "Admin",
+    "user": "User"
+  },
   "description": "Manage roles and permissions.",
   "new": {
     "title": "Create role",

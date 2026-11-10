@@ -1,0 +1,16 @@
+# Local development override: publish PostgreSQL on loopback so a host-run
+# `cargo run` can connect with TLS. Never use this override in production.
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml \
+#     --profile local-db up -d db
+#
+# The generated host DSN is written to deploy/secrets-dev/host.env by
+# scripts/generate-dev-secrets.sh.
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Replace the production HBA with the loopback/bridge-friendly rules.
+      - ./db/pg_hba.dev.conf:/etc/rs-admin/pg_hba.conf:ro

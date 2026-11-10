@@ -64,5 +64,14 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
-      - name: Validate compose manifest
-        run: docker compose -f deploy/compose.yaml --profile local-db config -q
+      - name: Generate development secrets
+        run: ./scripts/generate-dev-secrets.sh
+
+      - name: Validate database deployment
+        run: ./scripts/check-deploy-db.sh
+
+      - name: Validate edge deployment
+        run: ./scripts/check-deploy-edge.sh
+
+      - name: Validate deployment stack
+        run: ./scripts/check-deploy.sh

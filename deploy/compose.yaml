@@ -1,32 +1,283 @@
-name: rs-admin-dev
+# Production single-host stack.
+#
+#   gateway (nginx, TLS, host routing)
+#     ├── web   (static SPA, internal only)
+#     └── api   (Axum, internal only)
+#           └── db (PostgreSQL 18.6, local-db profile, internal only)
+#
+# Only the gateway publishes host ports. The api, web and db services are
+# reachable only over the Compose networks. See deploy/README.md for the
+# deployment sequence and deploy/.env.example for the non-secret settings.
+
+name: rs-admin
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
+  gateway:
+    image: nginxinc/nginx-unprivileged:1.29.8-alpine
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:8080"
+      - "443:8443"
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+    environment:
+      ADMIN_HOST: ${ADMIN_HOST:-admin.example.com}
+      API_HOST: ${API_HOST:-api.example.com}
+      # Restrict envsubst to the two host names; nginx variables stay intact.
+      NGINX_ENVSUBST_FILTER: '^(ADMIN_HOST|API_HOST)$'
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/templates:/etc/nginx/templates:ro
+      - ./gateway/snippets:/etc/nginx/snippets:ro
+      - certbot-webroot:/var/www/certbot
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+    secrets:
+      - tls_certificate
+      - tls_key
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:8080/.well-known/acme-challenge/healthz",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 10s
+    logging: *default-logging
+
+  web:
+    image: ${WEB_IMAGE:-rs-admin-web:local}
+    build:
+      context: ../frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://api.example.com}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    environment:
+      # Also feeds the static CSP's connect-src.
+      API_ORIGIN: ${VITE_API_BASE_URL:-https://api.example.com}
+      NGINX_ENVSUBST_FILTER: '^(API_ORIGIN)$'
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 10s
+    logging: *default-logging
+
+  api:
+    image: ${API_IMAGE:-rs-admin-api:local}
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - edge
+      - data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+      migrate:
+        condition: service_completed_successfully
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      DATABASE_MAX_CONNECTIONS: "10"
+      DATABASE_MIN_CONNECTIONS: "1"
+      DATABASE_ACQUIRE_TIMEOUT_SECONDS: "3"
+      DATABASE_IDLE_TIMEOUT_SECONDS: "600"
+      DATABASE_MAX_LIFETIME_SECONDS: "1800"
+      API_ADDR: 0.0.0.0:8080
+      METRICS_ADDR: 0.0.0.0:9100
+      PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN:-https://api.example.com}
+      ADMIN_ORIGIN: ${ADMIN_ORIGIN:-https://admin.example.com}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://admin.example.com}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.28.0.0/16}
+      JWT_ISSUER: ${JWT_ISSUER:-rs-admin}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-rs-admin-client}
+      JWT_EDDSA_KID: ${JWT_EDDSA_KID:-prod-2026-11}
+      JWT_EDDSA_PRIVATE_KEY_FILE: /run/secrets/jwt_ed25519_private
+      REFRESH_DERIVATION_KEY_FILE: /run/secrets/refresh_derivation_key
+      THROTTLE_KEY_FILE: /run/secrets/throttle_key
+      AUDIT_CHAIN_KEY_ID: ${AUDIT_CHAIN_KEY_ID:-prod-2026-11}
+      AUDIT_CHAIN_KEYS_FILE: /run/secrets/audit_chain_keys
+      PASSWORD_HASH_CONCURRENCY: ${PASSWORD_HASH_CONCURRENCY:-4}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      TZ: UTC
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    secrets:
+      - database_url
+      - internal_ca
+      - jwt_ed25519_private
+      - refresh_derivation_key
+      - throttle_key
+      - audit_chain_keys
+    healthcheck:
+      test:
+        ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 25s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1g
+    logging: *default-logging
+
+  migrate:
+    image: ${API_IMAGE:-rs-admin-api:local}
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    # Enabled by local-db so the acceptance `up` command starts a ready stack;
+    # external-database deployments run it explicitly with --profile tools.
+    profiles: ["local-db", "tools"]
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - edge
+      - data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    entrypoint: ["/usr/local/bin/rs-admin-migrate-and-grant"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL_FILE: /run/secrets/database_url_migrator
+      DATABASE_MAX_CONNECTIONS: "2"
+      TZ: UTC
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    secrets:
+      - database_url_migrator
+      - internal_ca
+    logging: *default-logging
+
   db:
     image: ${POSTGRES_IMAGE:-postgres:18.6-alpine}
     profiles: ["local-db"]
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-rs_admin}
-      POSTGRES_USER: ${POSTGRES_USER:-rs_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rs_admin_dev}
-      TZ: UTC
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - data
+    shm_size: 1gb
+    entrypoint: ["/usr/local/bin/rs-admin-db-entrypoint.sh"]
     command:
       - postgres
       - -c
       - shared_preload_libraries=pg_stat_statements
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=100
+      - -c
+      - wal_level=replica
+      # WAL archiving is enabled together with pgBackRest in the backup ticket;
+      # archive_mode=on without an archive_command retains WAL indefinitely.
+      - -c
+      - archive_mode=off
+      - -c
+      - max_wal_senders=10
+      - -c
+      - synchronous_commit=on
+      - -c
+      - timezone=UTC
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/rs-admin-secrets/postgres_server_cert
+      - -c
+      - ssl_key_file=/run/rs-admin-secrets/postgres_server_key
+      - -c
+      - ssl_ca_file=/run/rs-admin-secrets/internal_ca
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - hba_file=/etc/rs-admin/pg_hba.conf
       - -c
       - log_min_duration_statement=500ms
       - -c
       - log_parameter_max_length=0
       - -c
       - log_parameter_max_length_on_error=0
-      - -c
-      - timezone=UTC
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rs_admin}
+      POSTGRES_USER: ${POSTGRES_USER:-rs_admin}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      TZ: UTC
     volumes:
-      # PostgreSQL 18 images keep PGDATA under /var/lib/postgresql/18/docker.
       - pgdata:/var/lib/postgresql
+      - ./db/entrypoint.sh:/usr/local/bin/rs-admin-db-entrypoint.sh:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/pg_hba.conf:/etc/rs-admin/pg_hba.conf:ro
+    secrets:
+      - postgres_admin_password
+      - postgres_server_cert
+      - postgres_server_key
+      - internal_ca
+      - migrator_password
+      - runtime_password
+      - cleanup_password
+      - backup_password
     healthcheck:
       test:
         [
@@ -36,7 +287,58 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-      start_period: 10s
+      start_period: 15s
+    stop_grace_period: 60s
+    logging: *default-logging
+
+networks:
+  # Public-facing network: gateway, web and api. The fixed subnet is also the
+  # trusted proxy range used by the API.
+  edge:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+  # Database-only network. It has no route off the host.
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16
 
 volumes:
   pgdata:
+  certbot-webroot:
+
+secrets:
+  postgres_admin_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/postgres_admin_password
+  migrator_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/migrator_password
+  runtime_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/runtime_password
+  cleanup_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/cleanup_password
+  backup_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/backup_password
+  database_url:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url
+  database_url_migrator:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url_migrator
+  internal_ca:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/internal_ca.pem
+  postgres_server_cert:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/postgres_server_cert
+  postgres_server_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/postgres_server_key
+  jwt_ed25519_private:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/jwt-ed25519-private.pem
+  refresh_derivation_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/refresh-derivation.key
+  throttle_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/throttle.key
+  audit_chain_keys:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/audit-chain-keys.json
+  tls_certificate:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/tls_certificate
+  tls_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/tls_key

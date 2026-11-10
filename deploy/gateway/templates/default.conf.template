@@ -1,0 +1,129 @@
+# Rendered by the nginx image entrypoint. ${ADMIN_HOST} and ${API_HOST} are
+# injected by Compose; every other `$` is an nginx variable.
+
+limit_req_zone $binary_remote_addr zone=auth:10m rate=60r/m;
+
+# Resolve upstreams through Docker's embedded DNS per request so a restarted
+# container does not pin a stale address.
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# --- Plain HTTP: ACME challenges and a 301 everywhere else ------------------
+
+server {
+    listen 8080 default_server;
+    server_name _;
+
+    location = /.well-known/acme-challenge/healthz {
+        access_log off;
+        default_type text/plain;
+        return 204;
+    }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# --- TLS defaults -----------------------------------------------------------
+
+server {
+    listen 8443 ssl default_server;
+    server_name _;
+
+    # Unknown SNI never reaches an application.
+    ssl_reject_handshake on;
+}
+
+# --- Admin SPA --------------------------------------------------------------
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${ADMIN_HOST};
+
+    ssl_certificate /run/secrets/tls_certificate;
+    ssl_certificate_key /run/secrets/tls_key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    client_max_body_size 64k;
+
+    # Operational endpoints are not reachable from the public admin host.
+    location ~ ^/(health|metrics|api-docs|swagger-ui|openapi\.json)(/|$) {
+        return 404;
+    }
+
+    location / {
+        set $web_backend web:8080;
+        proxy_pass http://$web_backend;
+        include /etc/nginx/snippets/proxy-headers.conf;
+    }
+}
+
+# --- API --------------------------------------------------------------------
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${API_HOST};
+
+    ssl_certificate /run/secrets/tls_certificate;
+    ssl_certificate_key /run/secrets/tls_key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    limit_req_status 429;
+
+    set $api_backend api:8080;
+
+    # The API host only serves the versioned API. Health, metrics and docs
+    # stay on the internal Compose network.
+    location ~ ^/(health|metrics|api-docs|swagger-ui|openapi\.json)(/|$) {
+        return 404;
+    }
+
+    location ^~ /api/v1/auth/ {
+        limit_req zone=auth burst=10 nodelay;
+        client_max_body_size 1k;
+        proxy_pass http://$api_backend;
+        include /etc/nginx/snippets/proxy-headers.conf;
+    }
+
+    location ^~ /api/v1/ {
+        client_max_body_size 64k;
+        proxy_pass http://$api_backend;
+        include /etc/nginx/snippets/proxy-headers.conf;
+    }
+
+    location / {
+        return 404;
+    }
+
+    # Retry-After is part of the edge rate-limit contract; the body matches the
+    # API's problem+json shape closely enough for clients to classify it.
+    location @rate_limited {
+        default_type application/problem+json;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header Retry-After 60 always;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 429 '{"type":"about:blank","title":"Too Many Requests","status":429,"code":"rate_limited"}';
+    }
+
+    error_page 429 = @rate_limited;
+}

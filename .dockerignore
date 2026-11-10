@@ -1,0 +1,14 @@
+target
+.git
+.github
+.claude
+frontend
+docs
+*.md
+.env
+.env.*
+deploy/compose.yaml
+deploy/compose.dev.yaml
+deploy/gateway
+deploy/secrets
+deploy/secrets-dev

@@ -242,6 +242,13 @@
 
 ## Amendments
 
+- 2026-11-10：[生产镜像与 Compose 全栈](https://github.com/nasa-du/rs-admin-ds/issues/48) 落实并修订 §1.1、§2.5、§3.2 与 §12.2：
+  - `gateway` 与 `web` 使用 `nginxinc/nginx-unprivileged:1.29.8-alpine`（同为 nginx 1.29.8），容器内以 uid 101 监听 8080/8443；Compose 把主机 80/443 映射到这两个非特权端口。这是「容器非 root」与只发布 80/443 的直接结果，但保留了 ADR 固定的 nginx 版本。
+  - Compose 的 file-based secret 在非 Swarm 模式下保留宿主文件权限，且 `mode` 选项被忽略。因此 API/migrate 读取的 secret 文件为 `root:10001 0440`，gateway TLS 为 `root:101 0440`，db 入口以 root 复制到 postgres 可读的 `/run/rs-admin-secrets` 后降权；`/etc/rs-admin/secrets` 目录为 `root 0711`。这取代 §3.2 的「0400 root 所有」表述，同时保持「挂载文件优先」和最小权限。
+  - 生产栈的常驻服务为 `gateway`/`web`/`api`，`db` 由 `local-db` profile 控制，`migrate` 为 `local-db` 与 `tools` 共用的一次性任务；启用 `local-db` 时 Compose 先跑完 `migrate` 再启动 `api`，外部数据库模式仍显式 `--profile tools run --rm migrate`。因此 `docker compose --profile local-db up` 启动 gateway/web/api/db；§12.2 的 `--profile full` 不再需要。迁移仍不在 API 进程启动时执行。
+  - 数据库表级授权在迁移之后由 `migrate` 任务以 `rs_admin_migrator` 执行（`deploy/db/grants.sql`），因为角色与表分别由初始化脚本和迁移创建；未来表通过 `ALTER DEFAULT PRIVILEGES` 继承运行时权限。
+  - `archive_mode` 暂为 `off`：在没有 `pgbackrest archive-push` 的情况下启用会无限保留 WAL。备份票据（#50）连同 `archive_command`、pgBackRest 与 `rs_admin_backup` 的函数权限一起启用到 §5.2 的最终配置；本票据已创建备份角色并授予 `pg_backup_start`/`pg_backup_stop`/`pg_switch_wal` 的 EXECUTE。
+  - 公网不暴露 `/health/*`（§2.6、本票据验收）与 §6.8 的外部 uptime 探测存在冲突：v1 按 §2.6 收敛，外部 uptime 只探测前端首页，`/health/ready` 由内部监控使用。HSTS `preload` 仍待实际域名确认。
 - 2026-11-07：[OpenAPI 3.1 与生成 TS 客户端流水线](https://github.com/nasa-du/rs-admin-ds/issues/25) 修订 §2.5 与 §12.1：
   - `VITE_API_BASE_URL` 为 API 源（不含 `/api/v1`），生产占位 `https://api.example.com`；生成的客户端路径已带完整 `/api/v1` 前缀（ADR-0004 2026-11-07 修订、ADR-0006 同日修订）。
   - 开发 Vite proxy 转发 `/api/v1` 与 `/health` 到 `http://localhost:8080`。

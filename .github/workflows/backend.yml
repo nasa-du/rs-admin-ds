@@ -129,3 +129,12 @@ jobs:
             GIT_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
+
+      - name: Build database image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy/db
+          file: ./deploy/db/Dockerfile
+          push: false
+          cache-from: type=gha,scope=db
+          cache-to: type=gha,mode=max,scope=db

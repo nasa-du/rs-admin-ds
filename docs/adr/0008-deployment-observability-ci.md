@@ -157,7 +157,7 @@
    - `cargo test --workspace --all-targets`，使用 `postgres:18.6-alpine` service container（健康检查 `pg_isready`），`DATABASE_URL` 指向 service，`SQLX_OFFLINE=true` 编译期宏走 `.sqlx`；
    - `cargo sqlx prepare --check --workspace -- --all-targets --all-features`（sqlx-cli 0.9.0，与 crate 版本对齐）；
    - 生成 OpenAPI 并与提交的 `openapi.json` 做 `git diff --exit-code` 防漂移；
-   - 构建 API Docker 镜像（不推送）。
+   - 构建 API Docker 镜像与数据库/备份镜像（不推送；2026-11-10 修订）。
 3. **前端 job**：
    - `oven-sh/setup-bun` 固定 `1.4.2` + 缓存；`bun install --frozen-lockfile`；
    - `bun run lint`、`format:check`、`typecheck`、`i18n:check`、`test`、`build`；
@@ -165,7 +165,7 @@
    - orval 生成客户端后 `git diff --exit-code`；orval 8.46 在 Bun 1.4.2 不兼容时按 ADR-0004/0006 回退 `openapi-typescript` + `openapi-fetch`；
    - 构建 `web` Docker 镜像（`VITE_API_BASE_URL` 用占位值）。
 4. **Compose 校验**：`docker compose config -q`（含 `local-db`/`tools` profile）验证清单可解析；不启动完整栈。
-5. **镜像发布**：`main` 推送 `ghcr.io/nasa-du/rs-admin-ds/api:sha-<short>` 与 `.../web:sha-<short>`；`v*` tag 额外推 `vX.Y.Z`；生产不使用 `latest`。
+5. **镜像发布**：`main` 推送 `ghcr.io/nasa-du/rs-admin-ds/api:sha-<short>`、`.../web:sha-<short>` 与 `.../db:sha-<short>`（PostgreSQL 18.6 + pgBackRest，2026-11-10 修订）；`v*` tag 额外推 `vX.Y.Z`；生产不使用 `latest`。
 6. **定时安全任务**：每周 `cargo audit`、`bun audit`、Trivy 镜像扫描；PR 不因 advisory 数据库波动阻塞，CRITICAL 结果开 issue 并通知。CI 不接触生产 secret。
 7. **必需检查**：上述 job 全部通过才允许合并；`main` 开启分支保护。
 
@@ -174,7 +174,7 @@
 1. **镜像与审批**：GitHub Actions 构建并推 GHCR 不可变 tag；部署由 `workflow_dispatch` 手动触发，绑定 `production` environment（required reviewer）。生产按 tag/digest 部署，不追 `latest`。
 2. **部署步骤**（SSH 到部署主机）：
    1. `docker login ghcr.io`（只读 token 在主机 secret）；
-   2. 记录当前 tag 到部署状态文件；更新 `.env` 的 `API_IMAGE`/`WEB_IMAGE`；
+   2. 记录当前 tag 到部署状态文件；更新 `.env` 的 `API_IMAGE`/`WEB_IMAGE`/`DB_IMAGE`；
    3. `docker compose pull`；
    4. `docker compose run --rm migrate`（使用 `rs_admin_migrator` DSN，等待数据库就绪，应用全部 pending 迁移；非零退出则中止发布）；
    5. `docker compose up -d --remove-orphans`；
@@ -242,6 +242,13 @@
 
 ## Amendments
 
+- 2026-11-10：[定时运维：备份/WAL/恢复演练 + 维护清理任务](https://github.com/nasa-du/rs-admin-ds/issues/50) 落实 §5.5–§5.7、§7，并取代 #48 修订中「`archive_mode` 暂为 `off`」的过渡状态：
+  - `db` 镜像固定为 `postgres:18.6-alpine` + `pgbackrest=2.58.0-r0`。PostgreSQL 启用 `archive_mode=on`、`archive_timeout=60s`，`archive_command` 先 source 读取挂载凭据的 `rs-admin-pgbackrest-env`，再执行 `pgbackrest --stanza=rs-admin archive-push %p`。
+  - `db` 额外加入仅用于出站的 `storage` 网络（172.30.0.0/16），以便把 WAL 与备份写入 S3 兼容仓库；它不发布端口，生产 HBA 仍只接受 `data` 子网。`backup` 一次性任务只加入该网络。
+  - 每日全量备份在 `backup` 一次性容器中运行，以 postgres 用户共享 `pgdata`（只读）与 `pgsocket` 卷，经本地 Unix socket 以 `rs_admin_backup` 连接 `rs_admin` 数据库；仓库使用 AES-256 加密、时间型 30 天保留。备份任务在备份前执行幂等的 `stanza-create` 与 `pgbackrest check`（包含 WAL 归档校验），因此 `pgbackrest check` 与备份年龄指标属于备份任务而非清理容器。备份角色补授 `pg_create_restore_point(text)`（`pgbackrest check` 需要）。
+  - 备份成功后原子写入 `pgbackrest_backup_last_success_timestamp`、`pgbackrest_backup_last_attempt_success`、`pgbackrest_backup_last_attempt_timestamp` 的 Prometheus textfile；失败保留上次成功时间、置 attempt=0 并以非零状态退出。
+  - 维护任务由 systemd timer 触发一次性容器，使用 `rs_admin_cleanup` 连接；固定 key 的 `pg_try_advisory_lock` 保证单实例，未获锁以 0 退出。备份任务的并发由 pgBackRest 自身的仓库锁串行化，重复触发会明确失败而不是并行写入仓库。维护任务写 `maintenance_last_success_timestamp`、`maintenance_last_attempt_success`、`maintenance_duration_seconds` 与 `maintenance_rows_deleted{kind}` textfile 指标以监控清理延迟与删除量。清理顺序为 refresh token → session → 登录失败/限流 → 审计；审计只删除「第一行仍在保留期内」之前的连续前缀，在同一事务写入 `system_audit_logs_purged`（含 `from_seq`、`to_seq`、`count`、`last_purged_hash`、`retention_days`）并由写入器更新链头。验证器接受该锚点作为链首。
+  - 恢复演练从仓库恢复到一次性容器，校验 `_sqlx_migrations`、关键表行数与审计链，记录 `rto_seconds`；季度 timer 触发，失败通过 systemd `OnFailure` webhook 告警。
 - 2026-11-10：[CI 全量、GHCR、发布/回滚与一次性迁移](https://github.com/nasa-du/rs-admin-ds/issues/49) 修订 §4.7 与 §9.2：
   - `/health/ready` 从「迁移版本等于内嵌 Migrator」改为「数据库版本不低于内嵌 Migrator」。发布失败时上一 tag 的代码在新 schema 上继续提供服务；expand/contract 保证新增列/表/索引对旧代码兼容。数据库落后仍返回 503。contract 迁移（删除旧列/表/索引）只能在其旧代码不再作为回滚目标后发布，否则回滚会破坏运行时行为。
   - 发布脚本在显式执行一次性 `migrate` 后，用 `up -d --no-deps` 启动常驻服务（本地数据库先单独启动并等待健康）。这避免 `local-db` profile 在一次 `up` 中再次运行 `migrate`，也避免回滚时旧镜像的内嵌 Migrator 因未知的新迁移而报错。`docker compose --profile local-db up` 的手工验收路径仍保留原行为。

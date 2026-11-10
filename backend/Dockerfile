@@ -21,7 +21,10 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 RUN cargo build --locked --release \
     --package rs-admin-api \
     --bin rs-admin-api \
-    --bin migrate
+    --bin migrate \
+    --package rs-admin-cli \
+    --bin maintenance \
+    --bin verify-audit-chain
 
 FROM debian:bookworm-slim
 
@@ -40,12 +43,16 @@ RUN groupadd --system --gid 10001 rs-admin \
 
 COPY --from=builder /build/target/release/rs-admin-api /usr/local/bin/rs-admin-api
 COPY --from=builder /build/target/release/migrate /usr/local/bin/rs-admin-migrate
+COPY --from=builder /build/target/release/maintenance /usr/local/bin/rs-admin-maintenance
+COPY --from=builder /build/target/release/verify-audit-chain /usr/local/bin/rs-admin-verify-audit-chain
 COPY deploy/db/grants.sql /opt/rs-admin/grants.sql
 COPY deploy/api/migrate.sh /usr/local/bin/rs-admin-migrate-and-grant
 
 RUN chmod 0755 \
     /usr/local/bin/rs-admin-api \
     /usr/local/bin/rs-admin-migrate \
+    /usr/local/bin/rs-admin-maintenance \
+    /usr/local/bin/rs-admin-verify-audit-chain \
     /usr/local/bin/rs-admin-migrate-and-grant
 
 USER 10001:10001

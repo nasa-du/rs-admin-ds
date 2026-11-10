@@ -93,6 +93,26 @@ fn user_created(user_id: Uuid) -> AuditEvent {
     .expect("event")
 }
 
+fn purge_event(last_purged_hash: &[u8; 32]) -> AuditEvent {
+    AuditEvent::builder(
+        AuditAction::SystemAuditLogsPurged,
+        AuditResult::Success,
+        AuditActor::system(),
+        Uuid::now_v7(),
+    )
+    .detail("from_seq", 1)
+    .detail("to_seq", 2)
+    .detail("count", 2)
+    .detail("last_purged_hash", hex(last_purged_hash))
+    .detail("retention_days", 180)
+    .build()
+    .expect("event")
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[sqlx::test(migrations = "../../migrations")]
 async fn writes_append_linked_rows_and_verify(pool: PgPool) {
     let writer = writer();
@@ -259,6 +279,103 @@ async fn deleting_the_first_row_is_detected(pool: PgPool) {
             if chain_break.chain_seq == 2
                 && chain_break.reason == ChainBreakReason::PrefixMissing { found: 2 }
     ));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_purged_prefix_anchored_by_a_purge_event_verifies(pool: PgPool) {
+    let writer = writer();
+    writer.write(&pool, &login_fail()).await.expect("first");
+    writer.write(&pool, &key_rotated()).await.expect("second");
+    writer.write(&pool, &key_rotated()).await.expect("third");
+    writer.write(&pool, &login_fail()).await.expect("fourth");
+
+    let removed: Vec<u8> =
+        sqlx::query_scalar("SELECT row_hash FROM audit_logs WHERE chain_seq = 2")
+            .fetch_one(&pool)
+            .await
+            .expect("row hash");
+    let removed: [u8; 32] = removed.try_into().expect("32-byte hash");
+
+    sqlx::query("DELETE FROM audit_logs WHERE chain_seq <= 2")
+        .execute(&pool)
+        .await
+        .expect("purge prefix");
+    writer
+        .write(&pool, &purge_event(&removed))
+        .await
+        .expect("purge audit event");
+
+    let verification = verify_chain(&pool, &keyring())
+        .await
+        .expect("the remaining chain must verify against the purge anchor");
+    assert_eq!(verification.verified_rows, 3);
+    assert_eq!(verification.head_seq, 5);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_purge_that_removes_every_row_anchors_its_own_event(pool: PgPool) {
+    let writer = writer();
+    writer.write(&pool, &login_fail()).await.expect("first");
+    writer.write(&pool, &key_rotated()).await.expect("second");
+    writer.write(&pool, &key_rotated()).await.expect("third");
+
+    let removed: Vec<u8> =
+        sqlx::query_scalar("SELECT row_hash FROM audit_logs WHERE chain_seq = 3")
+            .fetch_one(&pool)
+            .await
+            .expect("head hash");
+    let removed: [u8; 32] = removed.try_into().expect("32-byte hash");
+
+    sqlx::query("DELETE FROM audit_logs")
+        .execute(&pool)
+        .await
+        .expect("purge everything");
+    writer
+        .write(&pool, &purge_event(&removed))
+        .await
+        .expect("purge audit event");
+
+    let verification = verify_chain(&pool, &keyring())
+        .await
+        .expect("the purge event anchors its own deleted prefix");
+    assert_eq!(verification.verified_rows, 1);
+    assert_eq!(verification.head_seq, 4);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn a_purged_prefix_with_an_unrelated_anchor_is_detected(pool: PgPool) {
+    let writer = writer();
+    writer.write(&pool, &login_fail()).await.expect("first");
+    writer.write(&pool, &key_rotated()).await.expect("second");
+    writer.write(&pool, &key_rotated()).await.expect("third");
+
+    sqlx::query("DELETE FROM audit_logs WHERE chain_seq <= 2")
+        .execute(&pool)
+        .await
+        .expect("purge prefix");
+    writer
+        .write(&pool, &purge_event(&[7u8; 32]))
+        .await
+        .expect("purge audit event");
+
+    let error = verify_chain(&pool, &keyring())
+        .await
+        .expect_err("a purge anchor that does not match the surviving prefix must fail");
+    assert!(matches!(
+        error,
+        VerifyError::Broken(chain_break)
+            if chain_break.chain_seq == 3
+                && chain_break.reason == ChainBreakReason::PrefixMissing { found: 3 }
+    ));
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn an_empty_chain_with_the_zero_anchor_verifies(pool: PgPool) {
+    let verification = verify_chain(&pool, &keyring())
+        .await
+        .expect("a freshly initialized chain is valid");
+    assert_eq!(verification.verified_rows, 0);
+    assert_eq!(verification.head_seq, 0);
 }
 
 #[sqlx::test(migrations = "../../migrations")]

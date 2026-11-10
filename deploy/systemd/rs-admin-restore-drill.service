@@ -1,0 +1,17 @@
+[Unit]
+Description=rs-admin quarterly restore drill
+Documentation=file:/opt/rs-admin/docs/runbooks/backup-restore.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=rs-admin-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/rs-admin/ops.env
+WorkingDirectory=/opt/rs-admin
+ExecStart=/opt/rs-admin/scripts/restore-drill.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -45,6 +45,11 @@ jobs:
             cache-scope: web
             build-args: |
               VITE_API_BASE_URL=${{ vars.VITE_API_BASE_URL || 'https://api.example.com' }}
+          - name: db
+            context: ./deploy/db
+            file: ./deploy/db/Dockerfile
+            cache-scope: db
+            build-args: ""
     steps:
       - uses: actions/checkout@v4
 

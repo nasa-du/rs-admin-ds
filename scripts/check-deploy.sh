@@ -60,8 +60,8 @@ compose="$(docker compose -f deploy/compose.yaml --profile local-db --profile to
 
 # --- Service topology -------------------------------------------------------
 expect_compose \
-    "stack defines gateway, web, api, db and migrate" \
-    '.services | keys | sort == ["api", "db", "gateway", "migrate", "web"]'
+    "stack defines gateway, web, api, db, migrate, maintenance and backup" \
+    '.services | keys | sort == ["api", "backup", "db", "gateway", "maintenance", "migrate", "web"]'
 
 expect_compose \
     "only the gateway publishes host ports" \
@@ -100,8 +100,12 @@ expect_compose \
     '[.services.api.networks | keys[]] | sort == ["data", "edge"]'
 
 expect_compose \
-    "db only joins the internal data network" \
-    '(.services.db.networks | keys) == ["data"]'
+    "db joins the internal data network and the outbound storage network" \
+    '(.services.db.networks | keys | sort) == ["data", "storage"]'
+
+expect_compose \
+    "db never joins the public edge network" \
+    '(.services.db.networks | has("edge")) | not'
 
 expect_compose \
     "the edge network has a fixed subnet for trusted proxies" \
@@ -111,8 +115,12 @@ expect_compose \
     "the data network is internal" \
     '.networks.data.internal == true'
 
+expect_compose \
+    "the storage network has egress for S3 archiving" \
+    '(.networks.storage.internal // false) == false and .networks.storage.ipam.config[0].subnet == "172.30.0.0/16"'
+
 # --- Container hardening ----------------------------------------------------
-for service in api web gateway db migrate; do
+for service in api web gateway db migrate maintenance backup; do
     expect_compose \
         "$service sets no-new-privileges" \
         "[.services.$service.security_opt[] | select(. == \"no-new-privileges:true\")] | length == 1"
@@ -187,16 +195,190 @@ expect_compose \
     '.services.db.environment.POSTGRES_PASSWORD_FILE == "/run/secrets/postgres_admin_password"'
 
 expect_compose \
-    "db is pinned to PostgreSQL 18.6 alpine" \
-    '.services.db.image == "postgres:18.6-alpine"'
+    "db uses the pinned PostgreSQL/pgBackRest image" \
+    '.services.db.image == "rs-admin-db:local"'
 
 expect_compose \
     "db preloads pg_stat_statements" \
     '.services.db.command | tostring | contains("shared_preload_libraries=pg_stat_statements")'
 
 expect_compose \
-    "db leaves WAL archiving off until pgBackRest is configured" \
-    '.services.db.command | tostring | contains("archive_mode=off")'
+    "db enables WAL archiving" \
+    '.services.db.command | tostring | contains("archive_mode=on")'
+
+expect_compose \
+    "db archives every WAL segment through pgBackRest" \
+    '.services.db.command | tostring | contains("archive_command=. /usr/local/bin/rs-admin-pgbackrest-env && pgbackrest --stanza=rs-admin archive-push %p")'
+
+expect_compose \
+    "db bounds the WAL archiving interval" \
+    '.services.db.command | tostring | contains("archive_timeout=60s")'
+
+expect_compose \
+    "db mounts pgBackRest repository secrets" \
+    '[.services.db.secrets[] | .source] | sort == ["backup_password", "backup_repo_cipher_pass", "backup_s3_access_key", "backup_s3_secret_key", "cleanup_password", "internal_ca", "migrator_password", "postgres_admin_password", "postgres_server_cert", "postgres_server_key", "runtime_password"]'
+
+expect_compose \
+    "db shares the PostgreSQL socket with the backup job" \
+    '[.services.db.volumes[] | select(.target == "/var/run/postgresql")] | length == 1'
+
+# --- Scheduled backup and maintenance ---------------------------------------
+expect_compose \
+    "maintenance and backup are one-shot tools-profile jobs" \
+    '(.services.maintenance.profiles | index("tools") != null) and (.services.backup.profiles | index("tools") != null)'
+
+expect_compose \
+    "maintenance uses the dedicated cleanup role DSN" \
+    '.services.maintenance.environment.DATABASE_URL_FILE == "/run/secrets/database_url_cleanup"'
+
+expect_compose \
+    "maintenance reads the audit chain keyring and retention settings" \
+    '.services.maintenance.environment.AUDIT_CHAIN_KEYS_FILE == "/run/secrets/audit_chain_keys" and .services.maintenance.environment.AUDIT_RETENTION_INFO_DAYS == "180" and .services.maintenance.environment.AUDIT_RETENTION_CRITICAL_DAYS == "365"'
+
+expect_compose \
+    "maintenance runs the cleanup binary as the non-root app user" \
+    '.services.maintenance.entrypoint == ["/usr/local/bin/rs-admin-maintenance"] and .services.maintenance.user == "10001:10001" and .services.maintenance.read_only == true'
+
+expect_compose \
+    "maintenance publishes duration and row-count metrics" \
+    '.services.maintenance.environment.MAINTENANCE_METRICS_FILE == "/var/lib/rs-admin/metrics/rs-admin-maintenance.prom" and ([.services.maintenance.volumes[] | select(.target == "/var/lib/rs-admin/metrics")] | length) == 1'
+
+expect_compose \
+    "backup uses the database image and reads the live cluster" \
+    '.services.backup.image == "rs-admin-db:local" and ([.services.backup.volumes[] | select(.target == "/var/lib/postgresql" and .read_only == true)] | length) == 1 and ([.services.backup.volumes[] | select(.target == "/var/run/postgresql")] | length) == 1'
+
+expect_compose \
+    "backup runs as postgres, is read-only and only joins the storage network" \
+    '.services.backup.user == "70:70" and .services.backup.read_only == true and (.services.backup.networks | keys) == ["storage"]'
+
+expect_compose \
+    "backup publishes the success metric textfile" \
+    '.services.backup.environment.BACKUP_METRICS_FILE == "/var/lib/rs-admin/metrics/rs-admin-backup.prom"'
+
+expect_compose \
+    "backup keeps 30 days of full backups" \
+    '.services.backup.environment.PGBACKREST_REPO1_RETENTION_FULL == "30"'
+
+expect_file \
+    "database image is based on the pinned PostgreSQL 18.6 alpine tag" \
+    "deploy/db/Dockerfile" \
+    '^FROM postgres:18\.6-alpine$'
+
+expect_file \
+    "database image pins the pgBackRest package version" \
+    "deploy/db/Dockerfile" \
+    'ARG PGBACKREST_VERSION=2\.58\.0-r0'
+
+expect_file \
+    "pgBackRest stanza is named rs-admin" \
+    "deploy/db/pgbackrest.conf" \
+    '^\[rs-admin\]$'
+
+expect_file \
+    "pgBackRest archives to an S3-compatible repository" \
+    "deploy/db/pgbackrest.conf" \
+    '^repo1-type=s3$'
+
+expect_file \
+    "pgBackRest encrypts the repository" \
+    "deploy/db/pgbackrest.conf" \
+    '^repo1-cipher-type=aes-256-cbc$'
+
+expect_file \
+    "pgBackRest keeps a 30-day time-based full retention" \
+    "deploy/db/pgbackrest.conf" \
+    '^repo1-retention-full-type=time$'
+
+expect_file \
+    "pgBackRest retention is 30 days" \
+    "deploy/db/pgbackrest.conf" \
+    '^repo1-retention-full=30$'
+
+expect_file \
+    "the daily backup writes the success metric" \
+    "deploy/db/backup.sh" \
+    'pgbackrest_backup_last_success_timestamp'
+
+expect_file \
+    "a failed backup withholds the success timestamp and fails the unit" \
+    "deploy/db/backup.sh" \
+    'exit 1'
+
+expect_file \
+    "backup container secrets are copied for the postgres user" \
+    "deploy/db/entrypoint.sh" \
+    'backup_s3_access_key'
+
+expect_file \
+    "the cleanup role can read the migration version" \
+    "deploy/db/grants.sql" \
+    'GRANT SELECT ON TABLE _sqlx_migrations TO rs_admin_runtime, rs_admin_cleanup'
+
+expect_file \
+    "the API image carries the maintenance and verify binaries" \
+    "backend/Dockerfile" \
+    'rs-admin-maintenance'
+
+expect_file \
+    "the API image carries the audit-chain verifier" \
+    "backend/Dockerfile" \
+    'rs-admin-verify-audit-chain'
+
+expect_file \
+    "the restore drill restores from the repository" \
+    "deploy/db/restore-drill-start.sh" \
+    '--type=immediate --target-action=promote restore'
+
+expect_file \
+    "the restore drill verifies the audit chain" \
+    "scripts/restore-drill.sh" \
+    'rs-admin-verify-audit-chain'
+
+expect_file \
+    "the restore drill records the measured RTO" \
+    "scripts/restore-drill.sh" \
+    '"rto_seconds"'
+
+# --- systemd timers ---------------------------------------------------------
+expect_file \
+    "backup runs daily at 03:00 UTC" \
+    "deploy/systemd/rs-admin-backup.timer" \
+    '^OnCalendar=\*-\*-\* 03:00:00$'
+
+expect_file \
+    "maintenance runs daily at 04:00 UTC" \
+    "deploy/systemd/rs-admin-maintenance.timer" \
+    '^OnCalendar=\*-\*-\* 04:00:00$'
+
+expect_file \
+    "the restore drill runs quarterly" \
+    "deploy/systemd/rs-admin-restore-drill.timer" \
+    '^OnCalendar=\*-01,04,07,10-01 05:30:00$'
+
+expect_file \
+    "backup is triggered by a persistent timer" \
+    "deploy/systemd/rs-admin-backup.timer" \
+    '^Persistent=true$'
+
+expect_file \
+    "maintenance is triggered by a persistent timer" \
+    "deploy/systemd/rs-admin-maintenance.timer" \
+    '^Persistent=true$'
+
+expect_file \
+    "failed scheduled jobs notify the alert hook" \
+    "deploy/systemd/rs-admin-backup.service" \
+    '^OnFailure=rs-admin-alert@%n\.service$'
+
+expect_file \
+    "systemd units use the documented absolute install path" \
+    "deploy/systemd/rs-admin-backup.service" \
+    '^WorkingDirectory=/opt/rs-admin/deploy$'
+
+expect_file \
+    "the restore drill unit uses an absolute script path" \
+    "deploy/systemd/rs-admin-restore-drill.service" \
+    '^ExecStart=/opt/rs-admin/scripts/restore-drill.sh$'
 
 expect_compose \
     "all services cap the Docker log buffer" \
@@ -274,6 +456,22 @@ if command -v openssl >/dev/null 2>&1; then
         "generated runtime DSN trusts the mounted internal CA" \
         "$secret_dir/database_url" \
         'sslrootcert=/run/secrets/internal_ca'
+    expect_file \
+        "generated maintenance DSN uses the cleanup role" \
+        "$secret_dir/database_url_cleanup" \
+        'postgres://rs_admin_cleanup:'
+    expect_file \
+        "generated S3 access key exists" \
+        "$secret_dir/backup_s3_access_key" \
+        '^[0-9a-f]{48}$'
+    expect_file \
+        "generated S3 secret key exists" \
+        "$secret_dir/backup_s3_secret_key" \
+        '^[0-9a-f]{48}$'
+    expect_file \
+        "generated repository cipher pass exists" \
+        "$secret_dir/backup_repo_cipher_pass" \
+        '^[0-9a-f]{64}$'
     expect_file \
         "generated database server certificate is valid PEM" \
         "$secret_dir/postgres_server_cert" \

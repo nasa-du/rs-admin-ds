@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily rs-admin PostgreSQL full backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=5m
+AccuracySec=30s
+Unit=rs-admin-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -5,7 +5,7 @@
 -- only be read and advanced. _sqlx_migrations is readable for readiness.
 
 GRANT USAGE ON SCHEMA public TO rs_admin_runtime, rs_admin_cleanup;
-GRANT SELECT ON TABLE _sqlx_migrations TO rs_admin_runtime;
+GRANT SELECT ON TABLE _sqlx_migrations TO rs_admin_runtime, rs_admin_cleanup;
 
 DO $$
 DECLARE
@@ -35,8 +35,8 @@ REVOKE ALL ON TABLE audit_chain_head FROM rs_admin_runtime;
 GRANT SELECT, UPDATE ON TABLE audit_chain_head TO rs_admin_runtime;
 
 -- The cleanup role may delete expired rows (including audit rows) and advance
--- the chain head after inserting the purge audit event. It only needs access
--- to the retention-managed tables, not to users or roles.
+-- the chain head after inserting the purge audit event. It reads the migration
+-- version for its startup check, but has no access to users or roles.
 GRANT SELECT, DELETE ON TABLE
     auth_refresh_tokens,
     auth_sessions,

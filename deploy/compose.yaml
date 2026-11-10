@@ -203,14 +203,117 @@ services:
       - internal_ca
     logging: *default-logging
 
+  maintenance:
+    image: ${API_IMAGE:-rs-admin-api:local}
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    profiles: ["tools"]
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - edge
+      - data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    entrypoint: ["/usr/local/bin/rs-admin-maintenance"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL_FILE: /run/secrets/database_url_cleanup
+      DATABASE_MAX_CONNECTIONS: "2"
+      DATABASE_MIN_CONNECTIONS: "0"
+      DATABASE_ACQUIRE_TIMEOUT_SECONDS: "3"
+      AUDIT_CHAIN_KEY_ID: ${AUDIT_CHAIN_KEY_ID:-prod-2026-11}
+      AUDIT_CHAIN_KEYS_FILE: /run/secrets/audit_chain_keys
+      AUDIT_RETENTION_INFO_DAYS: ${AUDIT_RETENTION_INFO_DAYS:-180}
+      AUDIT_RETENTION_CRITICAL_DAYS: ${AUDIT_RETENTION_CRITICAL_DAYS:-365}
+      MAINTENANCE_METRICS_FILE: /var/lib/rs-admin/metrics/rs-admin-maintenance.prom
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      TZ: UTC
+    volumes:
+      - ${RS_ADMIN_MAINTENANCE_METRICS_DIR:-./metrics-maintenance}:/var/lib/rs-admin/metrics
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    secrets:
+      - database_url_cleanup
+      - internal_ca
+      - audit_chain_keys
+    logging: *default-logging
+
+  backup:
+    image: ${DB_IMAGE:-rs-admin-db:local}
+    build:
+      context: ./db
+    profiles: ["local-db", "tools"]
+    restart: "no"
+    user: "70:70"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - storage
+    # Allows an S3-compatible repository running on the Docker host to be
+    # addressed as host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    entrypoint: ["/usr/local/bin/rs-admin-backup"]
+    environment:
+      RS_ADMIN_SECRETS_DIR: /run/secrets
+      PGBACKREST_CONFIG: /etc/pgbackrest/pgbackrest.conf
+      PGBACKREST_REPO1_S3_BUCKET: ${BACKUP_S3_BUCKET:-rs-admin-backups}
+      PGBACKREST_REPO1_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-https://s3.example.com}
+      PGBACKREST_REPO1_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
+      PGBACKREST_REPO1_S3_URI_STYLE: ${BACKUP_S3_URI_STYLE:-path}
+      PGBACKREST_REPO1_RETENTION_FULL: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_METRICS_FILE: /var/lib/rs-admin/metrics/rs-admin-backup.prom
+      TZ: UTC
+    volumes:
+      # The backup job reads the live cluster and connects through its socket;
+      # it never writes to PGDATA.
+      - pgdata:/var/lib/postgresql:ro
+      - pgsocket:/var/run/postgresql
+      - ${RS_ADMIN_METRICS_DIR:-./metrics}:/var/lib/rs-admin/metrics
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    secrets:
+      - backup_s3_access_key
+      - backup_s3_secret_key
+      - backup_repo_cipher_pass
+    logging: *default-logging
+
   db:
-    image: ${POSTGRES_IMAGE:-postgres:18.6-alpine}
+    image: ${DB_IMAGE:-rs-admin-db:local}
+    build:
+      context: ./db
     profiles: ["local-db"]
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
     networks:
       - data
+      # Outbound-only network for WAL archiving to the S3-compatible
+      # repository. The database has no ports and the HBA only accepts the
+      # data subnet.
+      - storage
+    # Allows an S3-compatible repository running on the Docker host to be
+    # addressed as host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     shm_size: 1gb
     entrypoint: ["/usr/local/bin/rs-admin-db-entrypoint.sh"]
     command:
@@ -229,10 +332,14 @@ services:
       - max_connections=100
       - -c
       - wal_level=replica
-      # WAL archiving is enabled together with pgBackRest in the backup ticket;
-      # archive_mode=on without an archive_command retains WAL indefinitely.
+      # Continuous WAL archiving. A failed push makes PostgreSQL retry and
+      # retain the segment in pg_wal; archive_timeout bounds RPO while idle.
       - -c
-      - archive_mode=off
+      - archive_mode=on
+      - -c
+      - 'archive_command=. /usr/local/bin/rs-admin-pgbackrest-env && pgbackrest --stanza=rs-admin archive-push %p'
+      - -c
+      - archive_timeout=60s
       - -c
       - max_wal_senders=10
       - -c
@@ -263,9 +370,19 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-rs_admin}
       POSTGRES_USER: ${POSTGRES_USER:-rs_admin}
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      # pgBackRest: the archive_command wrapper reads S3 credentials from the
+      # postgres-owned copy made by the entrypoint.
+      RS_ADMIN_SECRETS_DIR: /run/rs-admin-secrets
+      PGBACKREST_CONFIG: /etc/pgbackrest/pgbackrest.conf
+      PGBACKREST_REPO1_S3_BUCKET: ${BACKUP_S3_BUCKET:-rs-admin-backups}
+      PGBACKREST_REPO1_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-https://s3.example.com}
+      PGBACKREST_REPO1_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
+      PGBACKREST_REPO1_S3_URI_STYLE: ${BACKUP_S3_URI_STYLE:-path}
       TZ: UTC
     volumes:
       - pgdata:/var/lib/postgresql
+      # Shared with the backup job so pgBackRest can use the local socket.
+      - pgsocket:/var/run/postgresql
       - ./db/entrypoint.sh:/usr/local/bin/rs-admin-db-entrypoint.sh:ro
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - ./db/pg_hba.conf:/etc/rs-admin/pg_hba.conf:ro
@@ -278,6 +395,9 @@ services:
       - runtime_password
       - cleanup_password
       - backup_password
+      - backup_s3_access_key
+      - backup_s3_secret_key
+      - backup_repo_cipher_pass
     healthcheck:
       test:
         [
@@ -292,8 +412,9 @@ services:
     logging: *default-logging
 
 networks:
-  # Public-facing network: gateway, web and api. The fixed subnet is also the
-  # trusted proxy range used by the API.
+  # Public-facing network: gateway, web, api and the one-shot maintenance job
+  # (which needs egress for an external database). The fixed subnet is also
+  # the trusted proxy range used by the API.
   edge:
     ipam:
       config:
@@ -304,9 +425,17 @@ networks:
     ipam:
       config:
         - subnet: 172.29.0.0/16
+  # Outbound-only network for PostgreSQL WAL archiving and the backup job.
+  # No service on it publishes ports and only db/backup join it.
+  storage:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
 
 volumes:
   pgdata:
+  # PostgreSQL's Unix socket directory, shared by db and the backup job.
+  pgsocket:
   certbot-webroot:
 
 secrets:
@@ -324,6 +453,14 @@ secrets:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url
   database_url_migrator:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url_migrator
+  database_url_cleanup:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url_cleanup
+  backup_s3_access_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/backup_s3_access_key
+  backup_s3_secret_key:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/backup_s3_secret_key
+  backup_repo_cipher_pass:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/backup_repo_cipher_pass
   internal_ca:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/internal_ca.pem
   postgres_server_cert:

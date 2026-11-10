@@ -14,7 +14,7 @@ use crate::authz::{
     Denial, DenialTarget, RequestContext, require_permission, require_recent_auth, write_denial,
 };
 use crate::client_ip::ClientIp;
-use crate::error::{ApiError, FieldError};
+use crate::error::{ApiError, FieldError, identity_error};
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
 use crate::query::{parse_id, parse_pagination, validation_error};
@@ -29,7 +29,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use rs_admin_audit::{AuditAction, AuditActor, AuditEvent, AuditResult, TargetType};
 use rs_admin_domain::ErrorCode;
-use rs_admin_domain::identity::{DisplayName, Email, IdentityError, Phone, Username};
+use rs_admin_domain::identity::{DisplayName, Email, Phone, Username};
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleTarget};
 use rs_admin_security::{PasswordPolicy, PolicyViolation, generate_temporary_password};
@@ -359,19 +359,6 @@ pub(crate) fn user_within_scope(effective: &EffectivePermissions, roles: &[UserR
         ScopeRole::BuiltIn(None) | ScopeRole::Unresolved => RoleTarget::Unresolved,
         ScopeRole::Custom(keys) => RoleTarget::Custom(keys.as_slice()),
     }))
-}
-
-/// Map an identity value-object error to a field-level validation failure.
-fn identity_error(pointer: &str, error: IdentityError) -> ApiError {
-    let code = match error {
-        IdentityError::UsernameLength | IdentityError::DisplayNameLength => "invalid_length",
-        IdentityError::UsernameFormat
-        | IdentityError::UsernameReserved
-        | IdentityError::EmailTooLong
-        | IdentityError::EmailFormat
-        | IdentityError::PhoneLength => "invalid_format",
-    };
-    validation_error(pointer, code)
 }
 
 pub(crate) fn policy_error(violation: PolicyViolation) -> ApiError {

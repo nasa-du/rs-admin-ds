@@ -7,6 +7,7 @@ use axum::http::{
 };
 use axum::response::{IntoResponse, Response};
 use rs_admin_domain::ErrorCode;
+use rs_admin_domain::identity::IdentityError;
 use serde::Serialize;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -66,6 +67,23 @@ impl ProblemDetails {
             details: None,
         }
     }
+}
+
+/// Map an identity value-object error to a field-level validation failure.
+pub(crate) fn identity_error(pointer: &str, error: IdentityError) -> ApiError {
+    let code = match error {
+        IdentityError::UsernameLength | IdentityError::DisplayNameLength => "invalid_length",
+        IdentityError::UsernameFormat
+        | IdentityError::UsernameReserved
+        | IdentityError::EmailTooLong
+        | IdentityError::EmailFormat
+        | IdentityError::PhoneLength => "invalid_format",
+    };
+    ApiError::new(ErrorCode::ValidationFailed).with_errors(vec![FieldError {
+        pointer: pointer.to_owned(),
+        code: code.to_owned(),
+        params: None,
+    }])
 }
 
 /// OpenAPI schema for the closed error-code catalog.

@@ -1,11 +1,27 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   AUTH_CHANNEL_NAME,
   broadcastSignedOut,
   subscribeToAuthBroadcast,
   type AuthChannel,
 } from './auth-broadcast'
-import { handleRemoteSignOut, performSignOut } from './sign-out'
+import { authStore } from './auth-store'
+import {
+  handleRemoteSignOut,
+  performSignOut,
+  signOutEverywhere,
+} from './sign-out'
+
+const api = vi.hoisted(() => ({
+  logout: vi.fn(),
+  logoutAll: vi.fn(),
+}))
+
+vi.mock('@/api/generated/rs-admin', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/api/generated/rs-admin')>()
+  return { ...actual, logout: api.logout, logoutAll: api.logoutAll }
+})
 
 function fakeChannel() {
   const channel: AuthChannel & {
@@ -96,6 +112,33 @@ describe('performSignOut', () => {
     expect(signOut).toHaveBeenCalledTimes(1)
     expect(broadcast).toHaveBeenCalledTimes(1)
     expect(notifyServerFailure).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('signOutEverywhere', () => {
+  beforeEach(() => {
+    api.logoutAll.mockReset()
+    api.logoutAll.mockResolvedValue(undefined)
+    authStore.getState().reset()
+  })
+
+  it('revokes every server session and clears the local session', async () => {
+    authStore.getState().authenticate('access-token')
+
+    await expect(signOutEverywhere()).resolves.toEqual({ ok: true })
+
+    expect(api.logoutAll).toHaveBeenCalledWith({})
+    expect(authStore.getState().authStatus).toBe('unauthenticated')
+    expect(authStore.getState().accessToken).toBeNull()
+  })
+
+  it('still clears the local session when the request fails', async () => {
+    authStore.getState().authenticate('access-token')
+    api.logoutAll.mockRejectedValue(new Error('network down'))
+
+    await expect(signOutEverywhere()).resolves.toEqual({ ok: false })
+
+    expect(authStore.getState().authStatus).toBe('unauthenticated')
   })
 })
 

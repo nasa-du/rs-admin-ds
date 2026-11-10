@@ -47,6 +47,7 @@ import type {
   SetRolePermissionsRequest,
   SetUserRolesRequest,
   SetUserStatusRequest,
+  UpdateMeRequest,
   UpdateRoleRequest,
   UpdateUserRequest,
   UserCreatedResponse,
@@ -804,6 +805,90 @@ export function useGetMe<
   > & { queryKey: DataTag<QueryKey, TData, TError> }
 
   return withQueryKey(query, queryOptions.queryKey)
+}
+
+export const updateMe = (
+  updateMeRequest: UpdateMeRequest,
+  options?: SecondParameter<typeof customInstance>,
+  signal?: AbortSignal
+) => {
+  return customInstance<UserSelfResponse>(
+    {
+      url: `/api/v1/auth/me`,
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      data: updateMeRequest,
+      signal,
+    },
+    options
+  )
+}
+
+export const getUpdateMeMutationKey = () => ['updateMe'] as const
+
+export const getUpdateMeMutationOptions = <
+  TError = ProblemDetails,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateMe>>,
+    TError,
+    UpdateMeMutationVariables,
+    TContext
+  >
+  request?: SecondParameter<typeof customInstance>
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateMe>>,
+  TError,
+  UpdateMeMutationVariables,
+  TContext
+> => {
+  const mutationKey = getUpdateMeMutationKey()
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      'mutationKey' in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined }
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateMe>>,
+    UpdateMeMutationVariables
+  > = (props) => {
+    const { data } = props ?? {}
+
+    return updateMe(data, requestOptions)
+  }
+
+  return { mutationFn, ...mutationOptions }
+}
+
+export type UpdateMeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateMe>>
+>
+export type UpdateMeMutationBody = UpdateMeRequest
+export type UpdateMeMutationError = ProblemDetails
+export type UpdateMeMutationVariables = { data: UpdateMeRequest }
+
+export const useUpdateMe = <TError = ProblemDetails, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof updateMe>>,
+      TError,
+      UpdateMeMutationVariables,
+      TContext
+    >
+    request?: SecondParameter<typeof customInstance>
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof updateMe>>,
+  TError,
+  UpdateMeMutationVariables,
+  TContext
+> => {
+  return useMutation(getUpdateMeMutationOptions(options), queryClient)
 }
 
 export const reauthenticate = (

@@ -159,6 +159,52 @@ fn auth_operations_are_documented_with_stable_ids_and_bearer_security() {
 }
 
 #[test]
+fn update_me_is_documented_with_a_stable_id_and_bearer_security() {
+    let doc = document();
+    let update = &doc["paths"]["/api/v1/auth/me"]["patch"];
+
+    assert_eq!(update["operationId"], "updateMe");
+    assert_eq!(update["tags"][0], "Auth");
+    assert_eq!(
+        update["security"][0]["bearerAuth"],
+        serde_json::json!([]),
+        "updateMe authenticates by access token"
+    );
+    assert_eq!(
+        update["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/UpdateMeRequest"
+    );
+    assert_eq!(
+        update["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/UserSelfResponse"
+    );
+    for status in ["401", "403", "422", "503"] {
+        assert_eq!(
+            update["responses"][status]["content"]["application/problem+json"]["schema"]["$ref"],
+            "#/components/schemas/ProblemDetails",
+            "response {status} must use the problem contract"
+        );
+        assert!(
+            update["responses"][status]["headers"]["X-Request-Id"].is_object(),
+            "response {status} must document X-Request-Id"
+        );
+    }
+    assert!(
+        update["responses"]["401"]["headers"]["WWW-Authenticate"].is_object(),
+        "401 must document the Bearer challenge"
+    );
+
+    let schema = &doc["components"]["schemas"]["UpdateMeRequest"];
+    assert_eq!(schema["properties"]["display_name"]["type"], "string");
+    assert!(
+        schema["properties"]["display_name"]
+            .get("nullable")
+            .is_none(),
+        "display_name must not accept null"
+    );
+}
+
+#[test]
 fn refresh_is_documented_with_a_cookie_scheme_and_stable_operation_id() {
     let doc = document();
     let refresh = &doc["paths"]["/api/v1/auth/refresh"]["post"];

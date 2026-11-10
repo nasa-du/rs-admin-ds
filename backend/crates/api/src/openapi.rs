@@ -11,7 +11,7 @@ use crate::audit_logs::{
 use crate::auth::{
     ChangePasswordRequest, ChangePasswordResponse, LoginRequest, LoginResponse, LogoutRequest,
     ReauthenticateRequest, ReauthenticateResponse, RefreshRequest, RefreshResponse, RoleRef,
-    UserSelfResponse,
+    UpdateMeRequest, UserSelfResponse,
 };
 use crate::error::{ErrorCodeSchema, FieldError, ProblemDetails};
 use crate::roles::{
@@ -70,6 +70,7 @@ use utoipa::{Modify, OpenApi};
         RefreshRequest,
         RefreshResponse,
         RoleRef,
+        UpdateMeRequest,
         UserSelfResponse,
         CreateRoleRequest,
         UpdateRoleRequest,

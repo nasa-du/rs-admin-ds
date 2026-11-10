@@ -5,6 +5,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { type TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import {
+  readLocalPreference,
+  writeLocalPreference,
+} from '@/lib/local-preference'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -18,6 +22,7 @@ import {
 } from '@/components/ui/form'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
+import { LocalOnlyNotice } from '../components/local-only-notice'
 
 function makeNotificationsFormSchema(t: TFunction<'validation'>) {
   return z.object({
@@ -36,6 +41,16 @@ type NotificationsFormValues = z.infer<
   ReturnType<typeof makeNotificationsFormSchema>
 >
 
+const STORAGE_KEY = 'rs-admin:notifications'
+
+const DEFAULT_VALUES: NotificationsFormValues = {
+  type: 'all',
+  communication_emails: false,
+  marketing_emails: false,
+  social_emails: true,
+  security_emails: true,
+}
+
 export function NotificationsForm() {
   const { t } = useTranslation('settings')
   const { t: tValidation } = useTranslation('validation')
@@ -46,23 +61,19 @@ export function NotificationsForm() {
 
   const form = useForm<NotificationsFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      type: 'all',
-      communication_emails: false,
-      marketing_emails: false,
-      social_emails: true,
-      security_emails: true,
-    },
+    defaultValues: readLocalPreference(STORAGE_KEY, DEFAULT_VALUES),
   })
 
   return (
     <Form {...form}>
       <form
-        onSubmit={form.handleSubmit(() => {
+        onSubmit={form.handleSubmit((values) => {
+          writeLocalPreference(STORAGE_KEY, values)
           toast.success(t('notifications.saved'))
         })}
         className='space-y-8'
       >
+        <LocalOnlyNotice>{t('notifications.localOnly')}</LocalOnlyNotice>
         <FormField
           control={form.control}
           name='type'

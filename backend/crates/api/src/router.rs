@@ -106,7 +106,7 @@ pub(crate) fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(crate::auth::logout))
         .routes(routes!(crate::auth::logout_all))
         .routes(routes!(crate::auth::refresh))
-        .routes(routes!(crate::auth::get_me))
+        .routes(routes!(crate::auth::get_me, crate::auth::update_me))
         .routes(routes!(crate::auth::reauthenticate))
         .routes(routes!(crate::auth::change_password))
         .layer(DefaultBodyLimit::max(AUTH_JSON_BODY_BYTES));

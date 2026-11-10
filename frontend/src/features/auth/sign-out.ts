@@ -1,6 +1,6 @@
 import i18n from '@/i18n'
 import { toast } from 'sonner'
-import { logout } from '@/api/generated/rs-admin'
+import { logout, logoutAll } from '@/api/generated/rs-admin'
 import { isProtectedPath } from '@/lib/route-permissions'
 import { broadcastSignedOut } from './auth-broadcast'
 import { authSession } from './auth-session'
@@ -57,6 +57,21 @@ export function signOutOfApp(): Promise<{ ok: boolean }> {
     broadcast: () => broadcastSignedOut(),
     notifyServerFailure: () => {
       toast.error(i18n.t('auth:signOut.serverFailed'))
+    },
+  })
+}
+
+/**
+ * Revoke every session for the current user, including this one, then clear
+ * local state (spec §9.11). Used by Settings → Account.
+ */
+export function signOutEverywhere(): Promise<{ ok: boolean }> {
+  return performSignOut({
+    requestLogout: () => logoutAll({}),
+    signOut: () => authSession.signOut(),
+    broadcast: () => broadcastSignedOut(),
+    notifyServerFailure: () => {
+      toast.error(i18n.t('auth:signOut.everywhereServerFailed'))
     },
   })
 }

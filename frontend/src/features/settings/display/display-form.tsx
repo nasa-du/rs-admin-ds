@@ -5,6 +5,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { type TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import {
+  readLocalPreference,
+  writeLocalPreference,
+} from '@/lib/local-preference'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -16,6 +20,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { LocalOnlyNotice } from '../components/local-only-notice'
 
 const items = [
   {
@@ -54,6 +59,12 @@ function makeDisplayFormSchema(t: TFunction<'validation'>) {
 
 type DisplayFormValues = z.infer<ReturnType<typeof makeDisplayFormSchema>>
 
+const STORAGE_KEY = 'rs-admin:display'
+
+const DEFAULT_VALUES: DisplayFormValues = {
+  items: ['recents', 'home'],
+}
+
 export function DisplayForm() {
   const { t } = useTranslation('settings')
   const { t: tValidation } = useTranslation('validation')
@@ -64,19 +75,19 @@ export function DisplayForm() {
 
   const form = useForm<DisplayFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      items: ['recents', 'home'],
-    },
+    defaultValues: readLocalPreference(STORAGE_KEY, DEFAULT_VALUES),
   })
 
   return (
     <Form {...form}>
       <form
-        onSubmit={form.handleSubmit(() => {
+        onSubmit={form.handleSubmit((values) => {
+          writeLocalPreference(STORAGE_KEY, values)
           toast.success(t('display.saved'))
         })}
         className='space-y-8'
       >
+        <LocalOnlyNotice>{t('display.localOnly')}</LocalOnlyNotice>
         <FormField
           control={form.control}
           name='items'

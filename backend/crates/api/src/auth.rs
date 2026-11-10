@@ -14,10 +14,11 @@
 
 use crate::browser::CsrfProtected;
 use crate::client_ip::ClientIp;
-use crate::error::{ApiError, FieldError};
+use crate::error::{ApiError, FieldError, identity_error};
 use crate::json::ApiJson;
 use crate::middleware::RequestId;
 use crate::router::AppState;
+use crate::users::store_unavailable;
 use crate::wire::format_timestamp;
 use axum::Extension;
 use axum::Json;
@@ -32,7 +33,7 @@ use rs_admin_audit::{
 };
 use rs_admin_config::{AuthSettings, RotationKeys, SecurityConfig};
 use rs_admin_domain::ErrorCode;
-use rs_admin_domain::identity::{Email, Username};
+use rs_admin_domain::identity::{DisplayName, Email, Username};
 use rs_admin_domain::permission::PermissionKey;
 use rs_admin_domain::rbac::{BuiltInRole, EffectivePermissions, RoleGrant};
 use rs_admin_security::{
@@ -61,6 +62,7 @@ use rs_admin_store::auth::{
     touch_authenticated_at, touch_session_activity, unknown_account_lock_seconds,
     update_successful_login,
 };
+use rs_admin_store::users::update_user as store_update_user;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::net::IpAddr;
@@ -365,6 +367,16 @@ pub struct RefreshResponse {
 #[serde(deny_unknown_fields)]
 pub struct LogoutRequest {}
 
+/// `PATCH /auth/me` request body. Self-service profile editing is limited to
+/// the display name; every other profile field is administrator-managed.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateMeRequest {
+    #[serde(default, deserialize_with = "crate::json::non_null_display_name")]
+    #[schema(nullable = false)]
+    pub display_name: Option<String>,
+}
+
 #[utoipa::path(
     post,
     path = "/api/v1/auth/login",
@@ -558,6 +570,153 @@ pub async fn get_me(principal: SessionPrincipal) -> Json<UserSelfResponse> {
         &principal.roles,
         &principal.effective,
     ))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/auth/me",
+    tag = "Auth",
+    operation_id = "updateMe",
+    security(("bearerAuth" = [])),
+    request_body = UpdateMeRequest,
+    responses(
+        (
+            status = 200,
+            description = "Display name updated; the updated current-user profile is returned",
+            body = UserSelfResponse,
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 401,
+            description = "Access token or session invalid",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(
+                ("WWW-Authenticate" = String, description = "Bearer challenge"),
+                ("X-Request-Id" = String, description = "Server-generated request id")
+            )
+        ),
+        (
+            status = 403,
+            description = "Account disabled or a password change is required",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 422,
+            description = "Empty update or invalid display name",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        ),
+        (
+            status = 503,
+            description = "Authentication service unavailable",
+            body = crate::error::ProblemDetails,
+            content_type = "application/problem+json",
+            headers(("X-Request-Id" = String, description = "Server-generated request id"))
+        )
+    )
+)]
+pub async fn update_me(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    headers: HeaderMap,
+    client_ip: ClientIp,
+    principal: Authenticated,
+    ApiJson(payload): ApiJson<UpdateMeRequest>,
+) -> Result<Json<UserSelfResponse>, ApiError> {
+    let services = state.auth().ok_or_else(ApiError::service_unavailable)?;
+    let principal = principal.0;
+    let Some(raw_display_name) = payload.display_name.as_deref() else {
+        return Err(ApiError::new(ErrorCode::EmptyUpdate));
+    };
+    let display_name = DisplayName::parse(raw_display_name)
+        .map_err(|error| identity_error("/display_name", error))?;
+
+    let mut transaction = state
+        .database
+        .pool()
+        .begin()
+        .await
+        .map_err(dependency_unavailable)?;
+
+    let locked = lock_user_row(&mut transaction, principal.user.id)
+        .await
+        .map_err(dependency_unavailable)?
+        .ok_or_else(ApiError::session_invalid)?;
+    if locked.token_version != principal.user.token_version {
+        transaction.rollback().await.ok();
+        return Err(ApiError::session_invalid());
+    }
+    if !locked.is_active() {
+        transaction.rollback().await.ok();
+        return Err(ApiError::new(ErrorCode::AccountDisabled));
+    }
+
+    // An unchanged value is idempotent and writes no audit row, matching the
+    // administrator profile endpoint.
+    if locked.display_name == display_name.as_str() {
+        let roles = load_role_grants(&mut *transaction, locked.id)
+            .await
+            .map_err(dependency_unavailable)?;
+        transaction.rollback().await.ok();
+        let effective = resolve_effective_permissions(&roles);
+        return Ok(Json(user_self(&locked, &roles, &effective)));
+    }
+
+    store_update_user(
+        &mut transaction,
+        locked.id,
+        None,
+        None,
+        Some(display_name.as_str()),
+        None,
+    )
+    .await
+    .map_err(store_unavailable)?;
+
+    let mut updated = locked;
+    updated.display_name = display_name.as_str().to_owned();
+    let roles = load_role_grants(&mut *transaction, updated.id)
+        .await
+        .map_err(dependency_unavailable)?;
+    let effective = resolve_effective_permissions(&roles);
+
+    let event = with_user_agent(
+        AuditEvent::builder(
+            AuditAction::UserUpdated,
+            AuditResult::Success,
+            AuditActor::user(updated.id, updated.username.clone()),
+            request_id.0,
+        )
+        .target(
+            TargetType::User,
+            Some(updated.id),
+            Some(updated.username.clone()),
+        )
+        .detail(
+            "changed_fields",
+            serde_json::json!({ "display_name": true }),
+        )
+        // `user_updated` is shared with administrator edits; this marks the
+        // self-service path without widening the closed audit catalog.
+        .detail("source", "self")
+        .ip(client_ip.0),
+        user_agent(&headers),
+    )
+    .build()
+    .map_err(audit_event_invalid)?;
+    services
+        .audit
+        .write_in_tx(&mut transaction, &event)
+        .await
+        .map_err(audit_unavailable)?;
+
+    transaction.commit().await.map_err(dependency_unavailable)?;
+
+    Ok(Json(user_self(&updated, &roles, &effective)))
 }
 
 #[utoipa::path(

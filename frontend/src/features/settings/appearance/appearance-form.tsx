@@ -19,6 +19,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { LocalOnlyNotice } from '../components/local-only-notice'
 
 const appearanceFormSchema = z.object({
   theme: z.enum(['light', 'dark']),
@@ -53,6 +54,7 @@ export function AppearanceForm() {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-8'>
+        <LocalOnlyNotice>{t('appearance.localOnly')}</LocalOnlyNotice>
         <FormField
           control={form.control}
           name='font'

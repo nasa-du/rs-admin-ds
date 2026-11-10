@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { SheetFooter } from '@/components/ui/sheet'
 import { ApiErrorAlert } from '@/components/api-error-alert'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { DisabledTooltip } from '@/components/disabled-tooltip'
 import { runWithReauth } from '@/features/auth/reauth/reauth'
 import { ReauthCancelledError } from '@/features/auth/reauth/reauth-controller'
 import { isAccountLocked } from '../account-status'
@@ -33,7 +34,6 @@ import {
   refreshUserDetailIfOutOfScope,
 } from '../user-cache'
 import { AssignRolesDialog } from './assign-roles-dialog'
-import { DisabledTooltip } from './disabled-tooltip'
 import { ResetPasswordDialog } from './reset-password-dialog'
 
 type UserDetailActionsProps = {

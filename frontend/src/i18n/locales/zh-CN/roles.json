@@ -1,21 +1,130 @@
 {
   "title": "角色",
+  "description": "管理角色与权限。",
   "builtin": {
     "super_admin": "超级管理员",
     "admin": "管理员",
     "user": "用户"
   },
-  "description": "管理角色与权限。",
+  "actions": {
+    "create": "创建角色",
+    "refresh": "刷新",
+    "more": "打开角色操作菜单",
+    "view": "查看",
+    "edit": "编辑",
+    "delete": "删除",
+    "backToList": "返回角色列表",
+    "save": "保存更改",
+    "saving": "正在保存...",
+    "retry": "重试"
+  },
+  "columns": {
+    "name": "名称",
+    "description": "描述",
+    "permissions": "权限数",
+    "type": "类型",
+    "updatedAt": "更新时间",
+    "actions": "操作"
+  },
+  "type": {
+    "builtin": "内置",
+    "custom": "自定义",
+    "readOnly": "只读"
+  },
+  "sort": {
+    "nameAsc": "名称 A–Z",
+    "nameDesc": "名称 Z–A",
+    "createdAsc": "最早创建优先",
+    "createdDesc": "最新创建优先",
+    "updatedAsc": "最早更新优先",
+    "updatedDesc": "最近更新优先"
+  },
+  "filters": {
+    "search": "搜索",
+    "searchPlaceholder": "搜索名称或描述",
+    "type": "类型",
+    "allTypes": "全部类型",
+    "builtin": "内置",
+    "custom": "自定义",
+    "sort": "排序",
+    "clearAll": "清除全部",
+    "chipLabel": "{{label}}：{{value}}",
+    "remove": "移除筛选 {{filter}}",
+    "total_other": "共 {{total}} 个角色"
+  },
+  "states": {
+    "loading": "正在加载角色...",
+    "loadError": "无法加载角色列表。",
+    "noRoles": {
+      "title": "还没有角色",
+      "description": "创建第一个自定义角色以开始使用。"
+    },
+    "noMatches": {
+      "title": "没有匹配的角色",
+      "description": "请调整或清除筛选条件后重试。"
+    },
+    "clearFilters": "清除筛选",
+    "notFound": {
+      "title": "角色不存在",
+      "description": "该角色不存在或已被删除。"
+    },
+    "permissionsLoadError": "无法加载权限目录。",
+    "permissionsRetry": "重试"
+  },
+  "list": {
+    "permissionCount_other": "{{count}} 项权限"
+  },
+  "matrix": {
+    "selectGroup": "选择全部{{group}}权限",
+    "selectedCount_other": "已选 {{count}} 项",
+    "notGrantable": "超出你的有效权限"
+  },
   "new": {
     "title": "新建角色",
-    "description": "创建自定义角色并选择其权限。"
+    "description": "创建自定义角色并选择其权限。",
+    "name": "名称",
+    "nameHint": "1–64 个字符。活跃角色中名称不能重复。",
+    "descriptionLabel": "描述",
+    "permissions": "权限",
+    "submit": "创建角色",
+    "submitting": "正在创建...",
+    "success": "角色已创建。",
+    "discardTitle": "放弃创建？",
+    "discardDescription": "未保存的更改将丢失。",
+    "discard": "放弃更改",
+    "continueEditing": "继续编辑"
   },
   "detail": {
     "title": "角色详情",
-    "description": "查看该角色的权限与成员。"
+    "description": "查看该角色的权限与成员。",
+    "name": "名称",
+    "descriptionLabel": "描述",
+    "permissions": "权限",
+    "save": "保存更改",
+    "saving": "正在保存...",
+    "saved": "角色已保存。",
+    "partialFailure": "基本信息已保存；权限未保存。",
+    "builtinBanner": "内置角色的权限集固定，不可编辑。",
+    "superAdminBanner": "自动拥有全部权限（含未来新增的权限）。",
+    "notManageableBanner": "该角色超出你的有效权限，因此为只读。",
+    "userEmptyTitle": "不授予管理权限",
+    "userEmptyDescription": "基线 user 角色由所有账号自动持有，不授予任何管理权限。",
+    "viewUsers": "查看使用该角色的用户",
+    "delete": "删除角色",
+    "discardTitle": "放弃更改？",
+    "discardDescription": "未保存的更改将丢失。",
+    "discard": "放弃更改",
+    "continueEditing": "继续编辑"
   },
-  "empty": {
-    "title": "角色管理尚未接入",
-    "description": "角色列表、新建与权限矩阵将在后续版本接入。"
+  "delete": {
+    "title": "删除角色",
+    "description": "删除 {{name}}？这是软删除，无法恢复。",
+    "warning": "只有没有用户分配的角色才能删除。",
+    "confirm": "删除角色",
+    "deleting": "正在删除...",
+    "success": "角色已删除。",
+    "inUseTitle": "该角色仍有用户使用",
+    "inUseDescription": "请先调整这些用户的角色，再删除该角色。",
+    "viewUsers": "查看使用该角色的用户"
   }
 }

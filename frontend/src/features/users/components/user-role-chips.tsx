@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RoleRef } from '@/api/generated/model'
+import { roleDisplayName } from '@/lib/role-labels'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { roleDisplayName } from '../role-labels'
 
 type UserRoleChipsProps = {
   roles: RoleRef[]

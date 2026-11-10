@@ -149,6 +149,7 @@ const FIELD_ROOT_NAMES = new Set([
   'bio',
   'urls',
   'name',
+  'description',
   'dob',
   'language',
   'items',

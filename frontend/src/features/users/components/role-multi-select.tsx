@@ -1,6 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { RoleSummary, UserSelfResponse } from '@/api/generated/model'
+import {
+  isBaselineRole,
+  isPrivilegedRole,
+  roleDisplayName,
+} from '@/lib/role-labels'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,11 +14,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  isBaselineRole,
-  isPrivilegedRole,
-  roleDisplayName,
-} from '../role-labels'
 
 const FALLBACK_BASELINE: RoleSummary = {
   id: 'baseline-user',

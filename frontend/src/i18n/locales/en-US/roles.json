@@ -1,21 +1,133 @@
 {
   "title": "Roles",
+  "description": "Manage roles and permissions.",
   "builtin": {
     "super_admin": "Super admin",
     "admin": "Admin",
     "user": "User"
   },
-  "description": "Manage roles and permissions.",
+  "actions": {
+    "create": "Create role",
+    "refresh": "Refresh",
+    "more": "Open role actions",
+    "view": "View",
+    "edit": "Edit",
+    "delete": "Delete",
+    "backToList": "Back to roles",
+    "save": "Save changes",
+    "saving": "Saving...",
+    "retry": "Retry"
+  },
+  "columns": {
+    "name": "Name",
+    "description": "Description",
+    "permissions": "Permissions",
+    "type": "Type",
+    "updatedAt": "Updated",
+    "actions": "Actions"
+  },
+  "type": {
+    "builtin": "Built-in",
+    "custom": "Custom",
+    "readOnly": "Read-only"
+  },
+  "sort": {
+    "nameAsc": "Name A–Z",
+    "nameDesc": "Name Z–A",
+    "createdAsc": "Oldest first",
+    "createdDesc": "Newest first",
+    "updatedAsc": "Least recently updated",
+    "updatedDesc": "Recently updated"
+  },
+  "filters": {
+    "search": "Search",
+    "searchPlaceholder": "Search name or description",
+    "type": "Type",
+    "allTypes": "All types",
+    "builtin": "Built-in",
+    "custom": "Custom",
+    "sort": "Sort",
+    "clearAll": "Clear all",
+    "chipLabel": "{{label}}: {{value}}",
+    "remove": "Remove filter {{filter}}",
+    "total_one": "{{total}} role",
+    "total_other": "{{total}} roles"
+  },
+  "states": {
+    "loading": "Loading roles...",
+    "loadError": "Could not load roles.",
+    "noRoles": {
+      "title": "No roles yet",
+      "description": "Create the first custom role to get started."
+    },
+    "noMatches": {
+      "title": "No matching roles",
+      "description": "Adjust or clear the filters and try again."
+    },
+    "clearFilters": "Clear filters",
+    "notFound": {
+      "title": "Role not found",
+      "description": "This role does not exist or has been deleted."
+    },
+    "permissionsLoadError": "Could not load the permission catalog.",
+    "permissionsRetry": "Retry"
+  },
+  "list": {
+    "permissionCount_one": "{{count}} permission",
+    "permissionCount_other": "{{count}} permissions"
+  },
+  "matrix": {
+    "selectGroup": "Select all {{group}} permissions",
+    "selectedCount_one": "{{count}} selected",
+    "selectedCount_other": "{{count}} selected",
+    "notGrantable": "Beyond your effective permissions"
+  },
   "new": {
     "title": "Create role",
-    "description": "Create a custom role and choose its permissions."
+    "description": "Create a custom role and choose its permissions.",
+    "name": "Name",
+    "nameHint": "1–64 characters. Names are unique among active roles.",
+    "descriptionLabel": "Description",
+    "permissions": "Permissions",
+    "submit": "Create role",
+    "submitting": "Creating...",
+    "success": "Role created.",
+    "discardTitle": "Discard this role?",
+    "discardDescription": "Your unsaved changes will be lost.",
+    "discard": "Discard changes",
+    "continueEditing": "Continue editing"
   },
   "detail": {
     "title": "Role details",
-    "description": "Review this role's permissions and members."
+    "description": "Review this role's permissions and members.",
+    "name": "Name",
+    "descriptionLabel": "Description",
+    "permissions": "Permissions",
+    "save": "Save changes",
+    "saving": "Saving...",
+    "saved": "Role saved.",
+    "partialFailure": "Basic information was saved; permissions were not saved.",
+    "builtinBanner": "Built-in roles have a fixed permission set and cannot be edited.",
+    "superAdminBanner": "Automatically holds every permission, including permissions added in future releases.",
+    "notManageableBanner": "This role exceeds your effective permissions, so it is read-only.",
+    "userEmptyTitle": "No management permissions",
+    "userEmptyDescription": "The baseline user role is held by every account and grants no management permissions.",
+    "viewUsers": "View users with this role",
+    "delete": "Delete role",
+    "discardTitle": "Discard your changes?",
+    "discardDescription": "Your unsaved changes will be lost.",
+    "discard": "Discard changes",
+    "continueEditing": "Continue editing"
   },
-  "empty": {
-    "title": "Role management is not connected yet",
-    "description": "The role list, creation, and permission matrix will be connected in a later release."
+  "delete": {
+    "title": "Delete role",
+    "description": "Delete {{name}}? This soft-deletes the role and cannot be undone.",
+    "warning": "Only roles with no assigned users can be deleted.",
+    "confirm": "Delete role",
+    "deleting": "Deleting...",
+    "success": "Role deleted.",
+    "inUseTitle": "This role is still assigned",
+    "inUseDescription": "Reassign its users before deleting it.",
+    "viewUsers": "View users with this role"
   }
 }

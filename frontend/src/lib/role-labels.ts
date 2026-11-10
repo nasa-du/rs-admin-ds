@@ -30,6 +30,11 @@ export function isBaselineRole(role: RoleIdentity): boolean {
   return role.is_builtin && role.name === 'user'
 }
 
+/** The super admin built-in role; the server grants it every permission. */
+export function isSuperAdminRole(role: RoleIdentity): boolean {
+  return role.is_builtin && role.name === 'super_admin'
+}
+
 /** Admin-level built-ins that need an extra warning when granted. */
 export function isPrivilegedRole(role: RoleIdentity): boolean {
   return (

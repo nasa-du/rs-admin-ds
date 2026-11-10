@@ -3,6 +3,7 @@ import type { Table } from '@tanstack/react-table'
 import { ListFilter, RefreshCw, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { RoleSummary, UserSummary } from '@/api/generated/model'
+import { roleDisplayName } from '@/lib/role-labels'
 import { useSyncedValue } from '@/hooks/use-synced-value'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -21,7 +22,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { DataTableViewOptions } from '@/components/data-table/view-options'
-import { roleDisplayName } from '../role-labels'
 import {
   clearFiltersPatch,
   USERS_DEFAULT_SORT,

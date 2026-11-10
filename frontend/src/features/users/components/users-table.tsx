@@ -45,6 +45,7 @@ import {
 import { ApiErrorAlert } from '@/components/api-error-alert'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
+import { DisabledTooltip } from '@/components/disabled-tooltip'
 import {
   USERS_PAGE_SIZE_DEFAULT,
   USERS_PAGE_SIZE_OPTIONS,
@@ -52,7 +53,6 @@ import {
   sortingFromSearch,
   type UsersSearch,
 } from '../users-search'
-import { DisabledTooltip } from './disabled-tooltip'
 import { UserRoleChips } from './user-role-chips'
 import { UserStatusBadges } from './user-status-badges'
 import { UsersToolbar } from './users-toolbar'

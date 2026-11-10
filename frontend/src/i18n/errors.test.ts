@@ -168,6 +168,20 @@ describe('field error translation', () => {
     })
   })
 
+  it('maps role description pointers used by role management', () => {
+    expect(pointerToFieldName('/description')).toBe('description')
+    expect(
+      translateFieldError(t, {
+        pointer: '/description',
+        code: 'max_length',
+        params: { max: 500 },
+      })
+    ).toEqual({
+      field: 'description',
+      message: 'Must be at most 500 characters.',
+    })
+  })
+
   it('maps phone and backend length codes used by user management', () => {
     expect(pointerToFieldName('/phone')).toBe('phone')
     expect(

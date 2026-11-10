@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import type { UserDetail, UserSelfResponse } from '@/api/generated/model'
 import { useSetUserRoles } from '@/api/generated/rs-admin'
 import { markApiErrorHandled, toApiError } from '@/lib/api-error'
+import { isBaselineRole, isPrivilegedRole } from '@/lib/role-labels'
 import { useRetryAfter } from '@/hooks/use-retry-after'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,7 +24,6 @@ import {
 import { ApiErrorAlert } from '@/components/api-error-alert'
 import { runWithReauth } from '@/features/auth/reauth/reauth'
 import { ReauthCancelledError } from '@/features/auth/reauth/reauth-controller'
-import { isBaselineRole, isPrivilegedRole } from '../role-labels'
 import { useRoleOptions } from '../use-role-options'
 import {
   invalidateUserQueries,

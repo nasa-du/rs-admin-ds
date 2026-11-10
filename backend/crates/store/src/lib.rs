@@ -84,13 +84,15 @@ pub enum Readiness {
 }
 
 impl Readiness {
-    /// Readiness requires the applied migration version to equal the newest
-    /// embedded migration exactly. A database ahead of the binary is unready.
+    /// Readiness requires every migration embedded in this binary to be
+    /// applied. A database ahead of the binary is ready: releases are
+    /// expand/contract, so the previous image must keep serving while a
+    /// failed release is rolled back with the new schema retained
+    /// (ADR-0008 §9.2). A database behind the binary is unready.
     pub fn from_migration_versions(applied: Option<i64>, expected: i64) -> Self {
-        if applied == Some(expected) {
-            Self::Ready
-        } else {
-            Self::Unready(UnreadyReason::MigrationMismatch { applied, expected })
+        match applied {
+            Some(version) if version >= expected => Self::Ready,
+            _ => Self::Unready(UnreadyReason::MigrationMismatch { applied, expected }),
         }
     }
 }

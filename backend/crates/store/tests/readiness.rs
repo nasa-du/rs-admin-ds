@@ -22,7 +22,7 @@ async fn unreachable_database_is_unready_without_leaking_details() {
 }
 
 #[test]
-fn applied_version_must_exactly_match_the_embedded_migrator() {
+fn applied_version_must_cover_the_embedded_migrator() {
     let expected = 20261108000000;
 
     assert_eq!(
@@ -37,10 +37,12 @@ fn applied_version_must_exactly_match_the_embedded_migrator() {
         Readiness::from_migration_versions(None, expected),
         Readiness::Unready(UnreadyReason::MigrationMismatch { .. })
     ));
-    assert!(matches!(
+    // A newer schema is the state left by a failed release: the previous
+    // image must be ready so the rollback restores service (ADR-0008 §9.2).
+    assert_eq!(
         Readiness::from_migration_versions(Some(expected + 1), expected),
-        Readiness::Unready(UnreadyReason::MigrationMismatch { .. })
-    ));
+        Readiness::Ready
+    );
 }
 
 #[sqlx::test(migrations = "../../migrations")]

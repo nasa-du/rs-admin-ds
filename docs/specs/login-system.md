@@ -1727,7 +1727,7 @@ src/routes/
 - 启动顺序：加载并校验配置 → 连接数据库 → 同步权限目录与内置角色（advisory lock）→ 安装 metrics recorder 与 upkeep → 启动 listener。**不在启动时执行迁移**。
 - 健康检查：
   - `GET /health/live`：进程存活即 200，不查数据库。
-  - `GET /health/ready`：1–2 秒超时执行 `SELECT 1`，并校验 `_sqlx_migrations` 最新版本等于内嵌 Migrator 的版本；失败返回 503 `{"status":"unready"}`，不返回 SQL 错误或连接串。Docker healthcheck 与外部 uptime 使用该端点。
+  - `GET /health/ready`：1–2 秒超时执行 `SELECT 1`，并校验 `_sqlx_migrations` 最新版本不低于内嵌 Migrator 的版本（数据库落后未就绪；数据库领先视为就绪，见 ADR-0008 2026-11-10 修订）；失败返回 503 `{"status":"unready"}`，不返回 SQL 错误或连接串。Docker healthcheck 与外部 uptime 使用该端点。
 - `request_id`：服务端生成 UUIDv7，忽略客户端传入；写回 `X-Request-Id`；应用日志与审计共用该值作为 trace_id。
 - CORS：`CORS_ALLOWED_ORIGINS=https://admin.example.com`；精确 Origin allowlist，不使用通配符/`null`；credentials 仅限 §7.11 的端点。
 

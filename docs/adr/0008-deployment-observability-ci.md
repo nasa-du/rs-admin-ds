@@ -80,7 +80,7 @@
 6. **启动顺序**：加载并校验配置 → 连接数据库 → 同步权限目录与内置角色（advisory lock）→ 安装 metrics recorder 与 upkeep → 启动 listener。**不在启动时执行迁移**（ADR-0004 §9）。
 7. **健康检查**：
    - `GET /health/live`：进程存活即 200，不查数据库。
-   - `GET /health/ready`：1–2 秒超时执行 `SELECT 1`，并校验 `_sqlx_migrations` 最新版本等于内嵌 Migrator 的版本；失败返回 503 `{"status":"unready"}`，不返回 SQL 错误或连接串。Docker healthcheck 与外部 uptime 使用该端点。
+   - `GET /health/ready`：1–2 秒超时执行 `SELECT 1`，并校验 `_sqlx_migrations` 最新版本不低于内嵌 Migrator 的版本（数据库落后未就绪；数据库领先视为就绪，见 2026-11-10 修订）；失败返回 503 `{"status":"unready"}`，不返回 SQL 错误或连接串。Docker healthcheck 与外部 uptime 使用该端点。
 8. **request_id**：服务端生成 UUIDv7，忽略客户端传入；写回 `X-Request-Id`；应用日志与审计共用该值作为 trace_id。
 9. **CORS**：`CORS_ALLOWED_ORIGINS=https://admin.example.com`；精确 Origin allowlist，不使用通配符/`null`；credentials 仅限 ADR-0005 §7.4 及其修订的端点。
 
@@ -242,6 +242,9 @@
 
 ## Amendments
 
+- 2026-11-10：[CI 全量、GHCR、发布/回滚与一次性迁移](https://github.com/nasa-du/rs-admin-ds/issues/49) 修订 §4.7 与 §9.2：
+  - `/health/ready` 从「迁移版本等于内嵌 Migrator」改为「数据库版本不低于内嵌 Migrator」。发布失败时上一 tag 的代码在新 schema 上继续提供服务；expand/contract 保证新增列/表/索引对旧代码兼容。数据库落后仍返回 503。contract 迁移（删除旧列/表/索引）只能在其旧代码不再作为回滚目标后发布，否则回滚会破坏运行时行为。
+  - 发布脚本在显式执行一次性 `migrate` 后，用 `up -d --no-deps` 启动常驻服务（本地数据库先单独启动并等待健康）。这避免 `local-db` profile 在一次 `up` 中再次运行 `migrate`，也避免回滚时旧镜像的内嵌 Migrator 因未知的新迁移而报错。`docker compose --profile local-db up` 的手工验收路径仍保留原行为。
 - 2026-11-10：[生产镜像与 Compose 全栈](https://github.com/nasa-du/rs-admin-ds/issues/48) 落实并修订 §1.1、§2.5、§3.2 与 §12.2：
   - `gateway` 与 `web` 使用 `nginxinc/nginx-unprivileged:1.29.8-alpine`（同为 nginx 1.29.8），容器内以 uid 101 监听 8080/8443；Compose 把主机 80/443 映射到这两个非特权端口。这是「容器非 root」与只发布 80/443 的直接结果，但保留了 ADR 固定的 nginx 版本。
   - Compose 的 file-based secret 在非 Swarm 模式下保留宿主文件权限，且 `mode` 选项被忽略。因此 API/migrate 读取的 secret 文件为 `root:10001 0440`，gateway TLS 为 `root:101 0440`，db 入口以 root 复制到 postgres 可读的 `/run/rs-admin-secrets` 后降权；`/etc/rs-admin/secrets` 目录为 `root 0711`。这取代 §3.2 的「0400 root 所有」表述，同时保持「挂载文件优先」和最小权限。

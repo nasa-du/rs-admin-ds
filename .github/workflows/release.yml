@@ -1,0 +1,209 @@
+name: release
+
+# Manual production release (ADR-0008 §9). The `release` job targets the
+# `production` environment; configure it with a required reviewer so no
+# deployment starts without approval. The job SSHes to the deployment host,
+# checks out the release commit, and runs scripts/release.sh:
+#
+#   images -> one-shot migrate -> up -> 120 s readiness -> smoke checks
+#
+# On failure the script restores the previous image tags and raises the stack
+# again, keeping the new (forward-only) schema. With `dry_run` enabled the
+# script performs the same deployment, verifies it, and then rolls back,
+# writing a dry-run record.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag to deploy (sha-<short> or vX.Y.Z). 'latest' is refused."
+        required: true
+        type: string
+      dry_run:
+        description: "Deploy, verify readiness, then roll back to the previous release."
+        required: false
+        type: boolean
+        default: true
+      allow_destructive_migrations:
+        description: "Allow a contract-phase migration with destructive DDL. Take an on-demand backup first."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve release commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.resolve.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate the image tag
+        id: resolve
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+
+          tag="$IMAGE_TAG"
+          if [[ "$tag" == "latest" || "$tag" == *:latest ]]; then
+            echo "error: refusing the floating 'latest' tag" >&2
+            exit 1
+          fi
+
+          if [[ "$tag" =~ ^sha-[0-9a-f]{7,40}$ ]]; then
+            commit="$(git rev-parse --verify "${tag#sha-}^{commit}")"
+          elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            commit="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+          else
+            echo "error: image_tag must be sha-<hex> or vX.Y.Z" >&2
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "error: release commit $commit is not on main" >&2
+            exit 1
+          fi
+
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+          echo "Releasing tag $tag from commit $commit"
+
+  release:
+    name: release / ${{ inputs.image_tag }}
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      RELEASE_STATE_DIR: ${{ vars.RELEASE_STATE_DIR || '/var/lib/rs-admin/releases' }}
+      RELEASE_COMPOSE_PROFILES: ${{ vars.RELEASE_COMPOSE_PROFILES || 'local-db' }}
+      RELEASE_IMAGE_PREFIX: ${{ vars.RELEASE_IMAGE_PREFIX || format('ghcr.io/{0}', github.repository) }}
+      RELEASE_CA_CERT: ${{ vars.RELEASE_CA_CERT }}
+      RELEASE_COMMIT: ${{ needs.resolve.outputs.commit }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      ALLOW_DESTRUCTIVE: ${{ inputs.allow_destructive_migrations }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 1
+
+      - name: Validate the deployment configuration
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "error: $name is not configured for the production environment" >&2
+              exit 1
+            fi
+          done
+          if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "error: resolved commit is not a full SHA: $RELEASE_COMMIT" >&2
+            exit 1
+          fi
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" >"$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >"$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Check out the release commit on the deployment host
+        run: |
+          set -euo pipefail
+          ssh_target="$DEPLOY_USER@$DEPLOY_HOST"
+          remote="$(
+            printf 'cd %q && ' "$DEPLOY_PATH"
+            printf 'git fetch --prune --tags origin && '
+            printf '{ git fetch --unshallow origin 2>/dev/null || true; } && '
+            printf 'git checkout --force %q' "$RELEASE_COMMIT"
+          )"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$ssh_target" "$remote"
+
+      - name: Run the release script
+        run: |
+          set -euo pipefail
+          ssh_target="$DEPLOY_USER@$DEPLOY_HOST"
+          args=(
+            --tag "$IMAGE_TAG"
+            --commit "$RELEASE_COMMIT"
+            --image-prefix "$RELEASE_IMAGE_PREFIX"
+            --operator "$GITHUB_ACTOR"
+            --state-dir "$RELEASE_STATE_DIR"
+            --profiles "$RELEASE_COMPOSE_PROFILES"
+            --timeout 120
+          )
+          if [[ "$DRY_RUN" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          if [[ "$ALLOW_DESTRUCTIVE" == "true" ]]; then
+            args+=(--allow-destructive)
+          fi
+          if [[ -n "${RELEASE_CA_CERT:-}" ]]; then
+            args+=(--ca-cert "$RELEASE_CA_CERT")
+          fi
+
+          remote="$(printf 'cd %q && ./scripts/release.sh' "$DEPLOY_PATH")"
+          for arg in "${args[@]}"; do
+            remote+=" $(printf '%q' "$arg")"
+          done
+
+          set -o pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$ssh_target" "$remote" |
+            tee release.log
+
+      - name: Collect the release record
+        if: always()
+        run: |
+          set -euo pipefail
+          ssh_target="$DEPLOY_USER@$DEPLOY_HOST"
+          # The release script prints the exact record path on stdout. Prefer
+          # that over the newest file so a failed run never uploads a stale
+          # record from an earlier release.
+          record=""
+          if [[ -f release.log ]]; then
+            record="$(sed -n 's/^RELEASE_RECORD=//p' release.log | tail -n 1)"
+          fi
+          if [[ -n "$record" ]]; then
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$ssh_target" \
+              "cat $(printf '%q' "$record")" >release-record.json
+            {
+              echo '### Release record'
+              echo '```json'
+              cat release-record.json
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::the release produced no record (see release.log)"
+          fi
+
+      - name: Upload the release record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-record
+          path: |
+            release.log
+            release-record.json
+          if-no-files-found: warn

@@ -106,20 +106,38 @@ requires TLS for every TCP connection, including loopback.
 
 ## Production deployment
 
-Run these steps from `deploy/` (or pass `--env-file deploy/.env -f
-deploy/compose.yaml`).
+Production releases run through the `release` GitHub Actions workflow. It
+requires approval on the `production` environment, pulls immutable GHCR tags,
+runs the one-shot migration, starts the stack, waits up to 120 seconds for
+`/health/ready`, runs the edge smoke checks, and rolls back to the previous
+tag on failure. The full procedure, required secrets/variables and the
+dry-run flow are documented in
+[docs/runbooks/ci-cd.md](../docs/runbooks/ci-cd.md).
+
+The same flow is available on the deployment host:
+
+```sh
+# Rehearse: deploy, verify, then return to the previous release.
+./scripts/release.sh --tag sha-abc1234 --dry-run
+
+# Release an immutable tag produced by the publish workflow.
+./scripts/release.sh --tag v1.0.0 --operator ops
+```
+
+Before the first release:
 
 1. Populate `/etc/rs-admin/secrets` with the files and modes listed in
    [secrets/README.md](./secrets/README.md).
 2. Set `RS_ADMIN_SECRETS_DIR=/etc/rs-admin/secrets`, `APP_ENV=production`,
    the real `ADMIN_HOST`/`API_HOST`, origins, TLS certificate, image tags and
    `GIT_COMMIT` in `deploy/.env`.
-3. `docker compose pull` (or build the images on a trusted builder).
-4. `docker compose --profile local-db --profile tools run --rm migrate`.
-   Non-zero exit aborts the release.
-5. `docker compose --profile local-db up -d --remove-orphans`.
-6. Wait up to 120 seconds for `docker compose ps` to report `api` healthy via
-   its `/health/ready` healthcheck, then run the release smoke checks.
+3. Log the host in to GHCR with a read-only token (`docker login ghcr.io`).
+4. Check out the release commit and run the release workflow (or
+   `scripts/release.sh`). The script pulls the images, runs
+   `docker compose --profile local-db --profile tools run --rm migrate`,
+   starts the database and long-running services with `up -d --no-deps`, and
+   confirms readiness. A non-zero migration exit aborts before the new
+   containers start; the one-shot migration is not executed a second time.
 
 ### External database
 
@@ -131,6 +149,10 @@ Run `migrate` with only the `tools` profile:
 docker compose --profile tools run --rm migrate
 docker compose up -d --remove-orphans
 ```
+
+With `scripts/release.sh` (and the release workflow), set
+`RELEASE_COMPOSE_PROFILES=none`; the script still adds the `tools` profile for
+the one-shot migration and keeps the 120-second readiness/rollback behaviour.
 
 The DSN must keep `sslmode=verify-full` and a reachable `sslrootcert`. The
 external operator owns the four role definitions and their grants; run

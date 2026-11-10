@@ -13,7 +13,10 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY backend ./backend
 
-ENV GIT_COMMIT=${GIT_COMMIT}
+# Release builds never reach a database; compile-time SQLx macros must use the
+# committed offline metadata (.sqlx), as they do in CI.
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    SQLX_OFFLINE=true
 
 RUN cargo build --locked --release \
     --package rs-admin-api \

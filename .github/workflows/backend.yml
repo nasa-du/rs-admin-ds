@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: backend-${{ github.ref }}
   cancel-in-progress: true
@@ -13,7 +16,7 @@ jobs:
   backend:
     name: fmt, clippy, build, test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:18.6-alpine
@@ -34,6 +37,10 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The migration policy check compares against the PR base or the
+          # previous push, so the full history must be present.
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -41,6 +48,18 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install sqlx-cli 0.9.0
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: sqlx-cli@0.9.0
+          no-default-features: true
+          features: rustls,postgres
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -51,6 +70,12 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
+      - name: Check SQLx offline metadata
+        # The workspace uses runtime-checked queries today, so there are no
+        # query! macros to record. This fails as soon as a macro lands without
+        # committed .sqlx metadata (ADR-0004 §4.4).
+        run: cargo sqlx prepare --check --workspace -- --all-targets --all-features
+
       - name: Generate OpenAPI document
         run: cargo run --quiet --package rs-admin-api --bin openapi -- backend/openapi.json
 
@@ -60,6 +85,11 @@ jobs:
           # `git diff`, so deleting the committed artifact cannot pass CI.
           git add --intent-to-add -- backend/openapi.json
           git diff --exit-code -- backend/openapi.json
+
+      - name: Check migrations are forward-only and schema-compatible
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
+        run: ./scripts/check-migrations.sh --base-ref "$BASE_REF" --database-url "$DATABASE_URL"
 
       - name: Test
         run: cargo test --workspace --all-targets
@@ -75,3 +105,27 @@ jobs:
 
       - name: Validate deployment stack
         run: ./scripts/check-deploy.sh
+
+      - name: Validate Compose configuration
+        run: |
+          docker compose -f deploy/compose.yaml \
+            --profile local-db --profile tools config -q
+          docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml \
+            --profile local-db --profile tools config -q
+
+      - name: Test release and rollback script
+        run: ./scripts/tests/release.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          push: false
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api

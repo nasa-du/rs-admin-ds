@@ -41,8 +41,8 @@ pub enum SchemaError {
     #[error("the database is unavailable or its migration history cannot be read")]
     Unavailable,
     #[error(
-        "the database schema is at migration {applied:?} but this binary expects {expected}; \
-         run the migrate command first"
+        "the database schema is at migration {applied:?} but this binary requires at least \
+         {expected}; run the migrate command first"
     )]
     Mismatch { applied: Option<i64>, expected: i64 },
 }

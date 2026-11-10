@@ -10,6 +10,7 @@ use rs_admin_domain::identity::IdentityError;
 use rs_admin_security::PasswordError;
 use rs_admin_store::admin::AdminStoreError;
 use rs_admin_store::auth::AuthStoreError;
+use rs_admin_store::maintenance::MaintenanceError as MaintenanceStoreError;
 use rs_admin_store::rbac::RbacSyncError;
 use std::fmt;
 
@@ -41,6 +42,10 @@ pub enum CliError {
     AuditEvent(#[source] AuditEventError),
     #[error("audit write failed")]
     Audit(#[source] AuditError),
+    #[error("maintenance database operation failed")]
+    Maintenance(#[source] MaintenanceStoreError),
+    #[error("maintenance returned an incomplete purge interval")]
+    InvalidMaintenanceOutcome,
 }
 
 impl fmt::Debug for CliError {
@@ -67,6 +72,12 @@ impl From<sqlx::Error> for CliError {
 impl From<AuthStoreError> for CliError {
     fn from(error: AuthStoreError) -> Self {
         Self::SessionStore(error)
+    }
+}
+
+impl From<MaintenanceStoreError> for CliError {
+    fn from(error: MaintenanceStoreError) -> Self {
+        Self::Maintenance(error)
     }
 }
 

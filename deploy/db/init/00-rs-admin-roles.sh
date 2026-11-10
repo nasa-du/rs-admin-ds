@@ -44,6 +44,7 @@ GRANT pg_read_all_data, pg_read_all_settings, pg_monitor TO rs_admin_backup;
 -- grants belong here rather than in the migrator-owned grants.sql.
 GRANT EXECUTE ON FUNCTION pg_backup_start(text, boolean) TO rs_admin_backup;
 GRANT EXECUTE ON FUNCTION pg_backup_stop(boolean) TO rs_admin_backup;
+GRANT EXECUTE ON FUNCTION pg_create_restore_point(text) TO rs_admin_backup;
 GRANT EXECUTE ON FUNCTION pg_switch_wal() TO rs_admin_backup;
 
 -- The migrator owns the database and public schema so it can apply DDL

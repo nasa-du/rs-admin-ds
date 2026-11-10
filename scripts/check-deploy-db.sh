@@ -202,13 +202,17 @@ expect_super \
     "SELECT has_table_privilege('rs_admin_cleanup', 'auth_sessions', 'DELETE'), has_table_privilege('rs_admin_cleanup', 'auth_refresh_tokens', 'DELETE')" \
     "t|t"
 expect_super \
+    "cleanup may read the migration version" \
+    "SELECT has_table_privilege('rs_admin_cleanup', '_sqlx_migrations', 'SELECT')" \
+    "t"
+expect_super \
     "cleanup has no access to user or role data" \
     "SELECT has_table_privilege('rs_admin_cleanup', 'users', 'SELECT'), has_table_privilege('rs_admin_cleanup', 'roles', 'SELECT')" \
     "f|f"
 expect_super \
     "backup role can run the non-superuser backup protocol" \
-    "SELECT has_function_privilege('rs_admin_backup', 'pg_backup_start(text,boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_backup_stop(boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_switch_wal()', 'EXECUTE')" \
-    "t|t|t"
+    "SELECT has_function_privilege('rs_admin_backup', 'pg_backup_start(text,boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_backup_stop(boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_create_restore_point(text)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_switch_wal()', 'EXECUTE')" \
+    "t|t|t|t"
 
 if [[ "$failures" -ne 0 ]]; then
     printf '\n%d database deployment check(s) failed\n' "$failures" >&2

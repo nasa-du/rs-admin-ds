@@ -38,7 +38,10 @@ for name in \
     migrator_password \
     runtime_password \
     cleanup_password \
-    backup_password
+    backup_password \
+    backup_s3_access_key \
+    backup_s3_secret_key \
+    backup_repo_cipher_pass
 do
     copy_secret "$name"
 done

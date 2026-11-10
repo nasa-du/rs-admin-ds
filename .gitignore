@@ -7,6 +7,8 @@
 /deploy/secrets-dev/
 /deploy/secrets/*
 !/deploy/secrets/README.md
+/deploy/metrics/
+/deploy/metrics-maintenance/
 
 # Local agent worktrees
 .claude/worktrees/

@@ -1,0 +1,19 @@
+[Unit]
+Description=rs-admin PostgreSQL full backup and WAL archive check
+Documentation=file:/opt/rs-admin/docs/runbooks/backup-restore.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+OnFailure=rs-admin-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/rs-admin/ops.env
+WorkingDirectory=/opt/rs-admin/deploy
+# The backup container runs as uid 70 and must be able to write the metric.
+ExecStartPre=/usr/bin/install -d -m 0755 -o 70 -g 70 ${RS_ADMIN_METRICS_DIR}
+ExecStart=/usr/bin/docker compose --profile local-db --profile tools run --rm backup
+TimeoutStartSec=6h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

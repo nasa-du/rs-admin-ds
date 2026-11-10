@@ -8,7 +8,9 @@ pub mod audit;
 pub mod audit_logs;
 pub mod auth;
 pub mod identity;
+pub mod maintenance;
 pub mod rbac;
+pub mod restore;
 pub mod roles;
 pub mod users;
 

@@ -6,12 +6,18 @@ Docker Compose stack for one Linux host:
 gateway (nginx, TLS, host routing, rate limit)   host :80/:443
   ├── web   (static SPA, internal :8080)
   └── api   (Axum, internal :8080, metrics :9100)
-        └── db (PostgreSQL 18.6, internal :5432, profile local-db)
+        └── db (PostgreSQL 18.6 + pgBackRest, internal :5432, local-db)
+
+one-shot tools profile (systemd timers):
+  maintenance (retention cleanup)     backup (daily full + WAL archive check)
 ```
 
 Only `gateway` publishes host ports. `api`, `web` and `db` are reachable only
 over the fixed Compose networks (`edge` 172.28.0.0/16, internal `data`
 172.29.0.0/16). The API trusts forwarding headers only from the `edge` range.
+`db` also joins the outbound `storage` network (172.30.0.0/16) so pgBackRest
+can archive WAL to the S3-compatible repository; only `db` and the one-shot
+`backup` job join it.
 
 ## Prerequisites
 
@@ -164,7 +170,7 @@ external operator owns the four role definitions and their grants; run
 |---|---|---|
 | `rs_admin_migrator` | one-shot `migrate` job | database/schema owner, DDL |
 | `rs_admin_runtime` | API | DML only; `audit_logs` INSERT/SELECT; `audit_chain_head` SELECT/UPDATE; `_sqlx_migrations` SELECT |
-| `rs_admin_cleanup` | retention maintenance | DELETE on application tables including `audit_logs`; SELECT/UPDATE on `audit_chain_head` |
+| `rs_admin_cleanup` | retention maintenance | DELETE on application tables including `audit_logs`; SELECT/UPDATE on `audit_chain_head`; SELECT on `_sqlx_migrations` |
 | `rs_admin_backup` | pgBackRest | LOGIN REPLICATION + `pg_read_all_data`, `pg_read_all_settings`, `pg_monitor` |
 
 All roles authenticate with SCRAM over TLS. `pg_hba.conf` rejects md5 and
@@ -172,15 +178,109 @@ unencrypted host connections. The bootstrap superuser exists only for first
 initialization and operator recovery.
 
 `rs_admin_backup` uses the least-privilege pgBackRest setup (replication plus
-read-only catalog roles). The backup job ticket finalises the tool version; if
-that version still requires superuser for physical backup, its HBA exception is
-scoped to the backup container address.
+read-only catalog roles). The backup job runs as the `postgres` OS user in a
+one-shot container that shares the `pgdata` and `pgsocket` volumes read-only
+and connects through the local Unix socket, so no superuser exception or
+additional HBA entry is needed. PostgreSQL 18's non-superuser backup functions
+are granted to the role by the first-initialization script.
 
 The role init script only runs when the `pgdata` volume is first initialized.
 After restoring an existing cluster, provision these roles (or run
 `deploy/db/init/00-rs-admin-roles.sh`) before running `migrate`. To recreate a
 local development cluster from scratch, remove the volume with
 `docker compose down --volumes` before starting again.
+
+## Backups, WAL archiving and restore drills
+
+The `db` service runs `postgres:18.6-alpine` plus
+`pgbackrest=2.58.0-r0` (built from [db/Dockerfile](./db/Dockerfile)). The
+`[rs-admin]` stanza archives every WAL segment through
+`pgbackrest archive-push` and the `backup` tools-profile job runs a daily full
+backup. A time-based retention keeps 30 days of full backups and the WAL
+needed to restore them.
+
+Non-secret repository settings live in `deploy/.env`:
+
+```sh
+BACKUP_S3_BUCKET=rs-admin-backups
+BACKUP_S3_ENDPOINT=https://s3.example.com
+BACKUP_S3_REGION=us-east-1
+BACKUP_S3_URI_STYLE=path
+BACKUP_RETENTION_DAYS=30
+RS_ADMIN_METRICS_DIR=/var/lib/rs-admin/metrics
+```
+
+The S3 access key, secret key and repository cipher pass live in the secrets
+directory (`backup_s3_access_key`, `backup_s3_secret_key`,
+`backup_repo_cipher_pass`). Keep an offline copy of the cipher pass: without it
+the repository cannot be decrypted.
+
+The backup job writes a Prometheus textfile at
+`$RS_ADMIN_METRICS_DIR/rs-admin-backup.prom`:
+
+```
+pgbackrest_backup_last_success_timestamp
+pgbackrest_backup_last_attempt_success
+pgbackrest_backup_last_attempt_timestamp
+```
+
+The maintenance job writes
+`$RS_ADMIN_MAINTENANCE_METRICS_DIR/rs-admin-maintenance.prom` with
+`maintenance_last_success_timestamp`, `maintenance_last_attempt_success`,
+`maintenance_duration_seconds` and `maintenance_rows_deleted{kind}` so cleanup
+latency and volume are observable.
+
+Mount both directories into node_exporter's textfile collector; the
+observability ticket (#51) wires the collector and the Prometheus rule.
+`BackupStale` (`time() - last_success > 93600`, ADR-0008 §6.6) is the primary
+alert; a failed job also exits non-zero and triggers `rs-admin-alert@.service`
+when a webhook is configured.
+
+Install the host timers (host timezone is UTC). The units assume the
+repository checkout is `/opt/rs-admin`; adjust the paths if it lives
+elsewhere.
+
+```sh
+sudo install -d -m 0750 /etc/rs-admin
+sudo install -m 0640 deploy/systemd/rs-admin-ops.env.example /etc/rs-admin/ops.env
+sudo install -m 0644 deploy/systemd/rs-admin-*.service \
+    deploy/systemd/rs-admin-*.timer /etc/systemd/system/
+sudo install -D -m 0755 deploy/systemd/notify-failure.sh \
+    /usr/local/lib/rs-admin/notify-failure.sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now rs-admin-backup.timer \
+    rs-admin-maintenance.timer rs-admin-restore-drill.timer
+```
+
+| Timer | UTC schedule | Action |
+|---|---|---|
+| `rs-admin-backup.timer` | daily 03:00 | `stanza-create`, `check`, full backup, metric |
+| `rs-admin-maintenance.timer` | daily 04:00 | retention cleanup |
+| `rs-admin-restore-drill.timer` | quarterly, 1st at 05:30 | restore + verification |
+
+The maintenance job takes a fixed `pg_try_advisory_lock`; a second concurrent
+run prints a notice and exits 0. It removes refresh tokens, then sessions, then
+unlocked login-failure/throttle rows older than 30 days, then an expired audit
+prefix. Audit rows follow the 180/365-day severity tiers; the purge event and
+deleted rows commit in one transaction, and `last_purged_hash` anchors the
+surviving chain.
+
+Run a restore drill by hand or let the quarterly timer do it:
+
+```sh
+./scripts/restore-drill.sh
+./scripts/restore-drill.sh --expected-migration-version 20261108000000
+```
+
+The drill restores the newest repository backup into a throwaway container,
+checks the migration version and key table row counts, recomputes the audit
+HMAC chain, records the measured RTO under `$RESTORE_DRILL_STATE_DIR`, and
+removes the container and volume. A failed drill exits non-zero, keeps the
+record and notifies through `rs-admin-alert@.service`.
+
+With an external database, remove the `local-db` profile: the external
+operator owns backup, WAL archiving, restore drills and the `database_url_cleanup`
+DSN. The maintenance timer can still run with `--profile tools`.
 
 ## Edge behavior
 

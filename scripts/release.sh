@@ -59,6 +59,7 @@ Required:
 Options:
   --api-image IMAGE         Override the API image (default: <prefix>/api:<tag>)
   --web-image IMAGE         Override the web image (default: <prefix>/web:<tag>)
+  --db-image IMAGE          Override the database image (default: <prefix>/db:<tag>)
   --image-prefix PREFIX     GHCR image prefix (default:
                             ghcr.io/nasa-du/rs-admin-ds, or $RELEASE_IMAGE_PREFIX)
   --commit SHA              Release commit recorded in the state/record
@@ -92,6 +93,7 @@ EOF
 tag=""
 api_image=""
 web_image=""
+db_image=""
 image_prefix="${RELEASE_IMAGE_PREFIX:-ghcr.io/nasa-du/rs-admin-ds}"
 commit=""
 env_file="$repo_root/deploy/.env"
@@ -120,6 +122,11 @@ while (($# > 0)); do
         --web-image)
             [[ $# -ge 2 ]] || { echo "error: --web-image needs a value" >&2; exit 2; }
             web_image="$2"
+            shift 2
+            ;;
+        --db-image)
+            [[ $# -ge 2 ]] || { echo "error: --db-image needs a value" >&2; exit 2; }
+            db_image="$2"
             shift 2
             ;;
         --image-prefix)
@@ -222,8 +229,10 @@ is_immutable_image_ref() {
 image_prefix="${image_prefix%/}"
 api_image="${api_image:-$image_prefix/api:$tag}"
 web_image="${web_image:-$image_prefix/web:$tag}"
+db_image="${db_image:-$image_prefix/db:$tag}"
 is_immutable_image_ref "$api_image" || die "API image does not use an immutable tag: $api_image"
 is_immutable_image_ref "$web_image" || die "web image does not use an immutable tag: $web_image"
+is_immutable_image_ref "$db_image" || die "database image does not use an immutable tag: $db_image"
 
 commit="${commit:-$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf 'unknown')}"
 
@@ -262,6 +271,7 @@ state_get() {
 previous_tag="$(state_get TAG)"
 previous_api_image="$(state_get API_IMAGE)"
 previous_web_image="$(state_get WEB_IMAGE)"
+previous_db_image="$(state_get DB_IMAGE)"
 previous_commit="$(state_get COMMIT)"
 
 json_escape() {
@@ -322,10 +332,12 @@ write_record() {
         printf '  "requested_tag": "%s",\n' "$(json_escape "$tag")"
         printf '  "api_image": "%s",\n' "$(json_escape "$api_image")"
         printf '  "web_image": "%s",\n' "$(json_escape "$web_image")"
+        printf '  "db_image": "%s",\n' "$(json_escape "$db_image")"
         printf '  "commit": "%s",\n' "$(json_escape "$commit")"
         printf '  "previous_tag": %s,\n' "$(json_string_or_null "$previous_tag")"
         printf '  "previous_api_image": %s,\n' "$(json_string_or_null "$previous_api_image")"
         printf '  "previous_web_image": %s,\n' "$(json_string_or_null "$previous_web_image")"
+        printf '  "previous_db_image": %s,\n' "$(json_string_or_null "$previous_db_image")"
         printf '  "operator": "%s",\n' "$(json_escape "$operator")"
         printf '  "started_at": "%s",\n' "$started_at"
         printf '  "finished_at": "%s",\n' "$finished_at"
@@ -450,6 +462,12 @@ restore_previous_env() {
     fi
     set_env_var API_IMAGE "$previous_api_image"
     set_env_var WEB_IMAGE "$previous_web_image"
+    # Releases before the database/backup image existed have no DB_IMAGE in
+    # their state. Keep the current database image: it is the same PostgreSQL
+    # 18.6 major version and the schema is forward-only.
+    if [[ -n "$previous_db_image" ]]; then
+        set_env_var DB_IMAGE "$previous_db_image"
+    fi
     if [[ -n "$previous_commit" ]]; then
         set_env_var GIT_COMMIT "$previous_commit"
     fi
@@ -598,6 +616,7 @@ log "previous release: ${previous_tag:-none}"
 
 set_env_var API_IMAGE "$api_image"
 set_env_var WEB_IMAGE "$web_image"
+set_env_var DB_IMAGE "$db_image"
 set_env_var GIT_COMMIT "$commit"
 
 if ! compose pull; then
@@ -652,6 +671,7 @@ fi
     printf 'TAG=%s\n' "$tag"
     printf 'API_IMAGE=%s\n' "$api_image"
     printf 'WEB_IMAGE=%s\n' "$web_image"
+    printf 'DB_IMAGE=%s\n' "$db_image"
     printf 'COMMIT=%s\n' "$commit"
     printf 'DEPLOYED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } >"$state_file.tmp"

@@ -33,7 +33,8 @@ under **Settings → Environments → production → Required reviewers**.
 The backend check runs `cargo fmt`, clippy, build, `cargo sqlx prepare --check`,
 OpenAPI generation plus `git diff --exit-code`, the forward-only migration
 checks, the full test suite on the `postgres:18.6-alpine` service, the Compose
-deployment checks, `docker compose config -q` and an API image build.
+deployment checks, `docker compose config -q`, an API image build and the
+database/pgBackRest image build.
 
 The frontend check runs orval generation plus `git diff --exit-code`, lint,
 format, typecheck, the i18n key check, browser-mode tests, the production build
@@ -49,8 +50,10 @@ generated-client drift fails the pull request.
 ```
 ghcr.io/nasa-du/rs-admin-ds/api:sha-<short>    # every main push
 ghcr.io/nasa-du/rs-admin-ds/web:sha-<short>
+ghcr.io/nasa-du/rs-admin-ds/db:sha-<short>     # PostgreSQL 18.6 + pgBackRest
 ghcr.io/nasa-du/rs-admin-ds/api:vX.Y.Z         # v* tag pushes
 ghcr.io/nasa-du/rs-admin-ds/web:vX.Y.Z
+ghcr.io/nasa-du/rs-admin-ds/db:vX.Y.Z
 ```
 
 `latest` is refused by both the workflow and `scripts/release.sh`. Production
@@ -118,7 +121,7 @@ tag to return to; run the dry-run after the first successful release.
 ### Release
 
 With `dry_run` disabled, the same steps run and on success the script writes
-`deploy/.env` (`API_IMAGE`, `WEB_IMAGE`, `GIT_COMMIT`) plus
+`deploy/.env` (`API_IMAGE`, `WEB_IMAGE`, `DB_IMAGE`, `GIT_COMMIT`) plus
 `$RELEASE_STATE_DIR/deployed.env`. The JSON record is uploaded as the
 `release-record` workflow artifact and appended to the run summary.
 
@@ -220,6 +223,9 @@ Every run writes a JSON record under `$RELEASE_STATE_DIR`:
   "result": "success",
   "failure_stage": null,
   "requested_tag": "sha-abc1234",
+  "api_image": "ghcr.io/nasa-du/rs-admin-ds/api:sha-abc1234",
+  "web_image": "ghcr.io/nasa-du/rs-admin-ds/web:sha-abc1234",
+  "db_image": "ghcr.io/nasa-du/rs-admin-ds/db:sha-abc1234",
   "previous_tag": "sha-def5678",
   "commit": "…",
   "ready_seconds": 11,

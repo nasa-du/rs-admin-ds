@@ -114,6 +114,12 @@ write_secret runtime_password "$runtime_password"
 write_secret cleanup_password "$cleanup_password"
 write_secret backup_password "$backup_password"
 
+# pgBackRest repository credentials. Development uses placeholder S3 values;
+# the backup job is only meaningful with a reachable S3-compatible repository.
+write_secret backup_s3_access_key "$(random_password)"
+write_secret backup_s3_secret_key "$(random_password)"
+write_secret backup_repo_cipher_pass "$(openssl rand -hex 32)"
+
 # Internal CA and server certificates.
 openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
     -subj "/CN=rs-admin-dev-ca" \
@@ -139,6 +145,8 @@ write_secret database_url "$(build_dsn \
     rs_admin_runtime "$runtime_password" "$db_host" 5432 /run/secrets/internal_ca)"
 write_secret database_url_migrator "$(build_dsn \
     rs_admin_migrator "$migrator_password" "$db_host" 5432 /run/secrets/internal_ca)"
+write_secret database_url_cleanup "$(build_dsn \
+    rs_admin_cleanup "$cleanup_password" "$db_host" 5432 /run/secrets/internal_ca)"
 
 # Host DSN for a cargo-run API against the loopback-published database.
 write_secret host.env "DATABASE_URL=$(build_dsn \
@@ -160,12 +168,16 @@ chmod 0444 \
     "$target/runtime_password" \
     "$target/cleanup_password" \
     "$target/backup_password" \
+    "$target/backup_s3_access_key" \
+    "$target/backup_s3_secret_key" \
+    "$target/backup_repo_cipher_pass" \
     "$target/internal_ca.pem" \
     "$target/postgres_server_cert" \
     "$target/tls_certificate" \
     "$target/tls_key" \
     "$target/database_url" \
-    "$target/database_url_migrator"
+    "$target/database_url_migrator" \
+    "$target/database_url_cleanup"
 
 cat <<EOF
 Development secrets written to $target.

@@ -1,0 +1,7 @@
+[Unit]
+Description=Report failure of %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/rs-admin/ops.env
+ExecStart=/usr/local/lib/rs-admin/notify-failure.sh %i

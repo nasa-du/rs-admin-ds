@@ -198,6 +198,7 @@ reset_case() {
     cat >"$repo/deploy/.env" <<'EOF'
 API_IMAGE=ghcr.io/example/api:sha-def5678
 WEB_IMAGE=ghcr.io/example/web:sha-def5678
+DB_IMAGE=ghcr.io/example/db:sha-def5678
 GIT_COMMIT=unknown
 PUBLIC_API_ORIGIN=https://api.example.com
 ADMIN_ORIGIN=https://admin.example.com
@@ -206,6 +207,7 @@ EOF
 TAG=sha-def5678
 API_IMAGE=ghcr.io/example/api:sha-def5678
 WEB_IMAGE=ghcr.io/example/web:sha-def5678
+DB_IMAGE=ghcr.io/example/db:sha-def5678
 COMMIT=unknown
 DEPLOYED_AT=2026-01-01T00:00:00Z
 EOF
@@ -295,7 +297,9 @@ assert_record "successful release record" '
 '
 assert_env "release updates the API image" "API_IMAGE=ghcr.io/example/api:sha-abc1234"
 assert_env "release updates the web image" "WEB_IMAGE=ghcr.io/example/web:sha-abc1234"
+assert_env "release updates the database image" "DB_IMAGE=ghcr.io/example/db:sha-abc1234"
 assert_state "release records the deployed tag" "TAG=sha-abc1234"
+assert_state "release records the database image" "DB_IMAGE=ghcr.io/example/db:sha-abc1234"
 if [[ "$(wc -l <"$work/up_count" 2>/dev/null || printf '0')" == "2" ]]; then
     pass "successful release starts the database and the long-running services"
 else
@@ -330,6 +334,7 @@ assert_record "dry-run record" '
     .rollback.ready == true
 '
 assert_env "dry-run restores the API image" "API_IMAGE=ghcr.io/example/api:sha-def5678"
+assert_env "dry-run restores the database image" "DB_IMAGE=ghcr.io/example/db:sha-def5678"
 assert_state "dry-run leaves the deployed tag unchanged" "TAG=sha-def5678"
 if [[ "$(wc -l <"$work/up_count" 2>/dev/null || printf '0')" == "4" ]]; then
     pass "dry-run raises the new and previous stacks"

@@ -1,0 +1,68 @@
+# Promtail: Docker stdout -> Loki (ADR-0008 §6.1–§6.3).
+#
+# Only bounded labels are attached (container, compose service/project and
+# stream). request_id stays in the log line and is never a label. Before the
+# line leaves the host, replace stages redact credentials even if an upstream
+# component accidentally logs one.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: project
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream
+      - source_labels: ["__meta_docker_container_log_path"]
+        target_label: __path__
+    pipeline_stages:
+      # Unwrap the Docker json-file envelope, leaving the application line in
+      # `output`.
+      - docker: {}
+
+      # Headers that may carry session or proxy credentials.
+      - replace:
+          expression: '(?i)(authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\s,;"]+'
+          replace: "$1=[REDACTED]"
+
+      # Key/value secrets, including DSNs and keyring names.
+      - replace:
+          expression: '(?i)(password|passwd|secret|token|api[_-]?key|database_url|refresh[_-]?derivation|throttle[_-]?key|audit[_-]?chain[_-]?keys)\s*[:=]\s*[^\s,;"]+'
+          replace: "$1=[REDACTED]"
+
+      # Bearer tokens and JWT-shaped values.
+      - replace:
+          expression: '(?i)bearer\s+[A-Za-z0-9._~+/-]+=*'
+          replace: "Bearer [REDACTED]"
+      - replace:
+          expression: '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b'
+          replace: "[REDACTED_JWT]"
+
+      # Query strings must never be logged, but redact secret-looking values
+      # if a component ever emits one.
+      - replace:
+          expression: '(?i)([?&](token|password|secret|key|code)=)[^&\s"]+'
+          replace: "$1[REDACTED]"
+
+      - labels:
+          container:
+          service:
+          project:
+          stream:

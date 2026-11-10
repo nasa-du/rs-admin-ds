@@ -395,6 +395,7 @@ services:
       - runtime_password
       - cleanup_password
       - backup_password
+      - monitor_password
       - backup_s3_access_key
       - backup_s3_secret_key
       - backup_repo_cipher_pass
@@ -449,6 +450,8 @@ secrets:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/cleanup_password
   backup_password:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/backup_password
+  monitor_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/monitor_password
   database_url:
     file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/database_url
   database_url_migrator:

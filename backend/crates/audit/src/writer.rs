@@ -39,6 +39,18 @@ impl AuditWriter {
         transaction: &mut Transaction<'_, Postgres>,
         event: &AuditEvent,
     ) -> Result<AuditRecord, AuditError> {
+        let result = self.write_in_tx_inner(transaction, event).await;
+        if result.is_err() {
+            metrics::counter!("audit_write_failures_total").increment(1);
+        }
+        result
+    }
+
+    async fn write_in_tx_inner(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &AuditEvent,
+    ) -> Result<AuditRecord, AuditError> {
         let head = audit::lock_head(transaction)
             .await?
             .ok_or(AuditError::ChainHeadMissing)?;
@@ -87,8 +99,20 @@ impl AuditWriter {
         pool: &PgPool,
         event: &AuditEvent,
     ) -> Result<AuditRecord, AuditError> {
+        let result = self.write_inner(pool, event).await;
+        if result.is_err() {
+            metrics::counter!("audit_write_failures_total").increment(1);
+        }
+        result
+    }
+
+    async fn write_inner(
+        &self,
+        pool: &PgPool,
+        event: &AuditEvent,
+    ) -> Result<AuditRecord, AuditError> {
         let mut transaction = pool.begin().await.map_err(AuditError::Database)?;
-        let record = self.write_in_tx(&mut transaction, event).await?;
+        let record = self.write_in_tx_inner(&mut transaction, event).await?;
         transaction.commit().await.map_err(AuditError::Database)?;
         Ok(record)
     }

@@ -40,6 +40,28 @@ server {
     ssl_reject_handshake on;
 }
 
+# --- Internal TLS probe -----------------------------------------------------
+# Used by blackbox_exporter for the CertificateExpiry alert. It presents the
+# same certificate on the internal edge network and never proxies a request.
+
+server {
+    listen 8443 ssl;
+    server_name gateway;
+
+    include /etc/nginx/snippets/tls.conf;
+
+    access_log off;
+
+    location = / {
+        default_type text/plain;
+        return 204;
+    }
+
+    location / {
+        return 404;
+    }
+}
+
 # --- Admin SPA --------------------------------------------------------------
 
 server {
@@ -47,14 +69,7 @@ server {
     http2 on;
     server_name ${ADMIN_HOST};
 
-    ssl_certificate /run/secrets/tls_certificate;
-    ssl_certificate_key /run/secrets/tls_key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets off;
+    include /etc/nginx/snippets/tls.conf;
 
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     client_max_body_size 64k;
@@ -78,14 +93,7 @@ server {
     http2 on;
     server_name ${API_HOST};
 
-    ssl_certificate /run/secrets/tls_certificate;
-    ssl_certificate_key /run/secrets/tls_key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
-    ssl_prefer_server_ciphers off;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-    ssl_session_tickets off;
+    include /etc/nginx/snippets/tls.conf;
 
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     limit_req_status 429;

@@ -6,8 +6,13 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use sqlx::PgPool;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+
+/// Interval for the connection-pool gauges. The spec scrapes every 15 seconds;
+/// refreshing on the same cadence keeps the values fresh without extra traffic.
+const POOL_METRICS_INTERVAL: Duration = Duration::from_secs(15);
 
 const METRICS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
@@ -33,13 +38,33 @@ pub fn install_metrics_recorder() -> Result<PrometheusHandle, MetricsError> {
         "http_request_duration_seconds",
         "HTTP request latency in seconds."
     );
+    metrics::describe_gauge!(
+        "db_pool_connections",
+        "Database pool connections grouped by state (active/idle/max)."
+    );
+    metrics::describe_counter!(
+        "auth_login_attempts_total",
+        "Login attempts grouped by result and finite reason."
+    );
     metrics::describe_counter!(
         "auth_login_lockouts_total",
         "Login lockouts grouped by throttle scope."
     );
+    metrics::describe_counter!(
+        "auth_refresh_reuse_detected_total",
+        "Refresh-token reuse detections."
+    );
+    metrics::describe_histogram!(
+        "auth_password_hash_seconds",
+        "Argon2id hash and verification latency in seconds."
+    );
     metrics::describe_gauge!(
         "auth_global_circuit_open",
         "Whether the global login circuit is open (1) or closed (0)."
+    );
+    metrics::describe_counter!(
+        "audit_write_failures_total",
+        "Audit chain writes that failed and failed the calling action closed."
     );
     metrics::describe_gauge!("build_info", "Build information.");
     metrics::gauge!(
@@ -60,6 +85,29 @@ pub fn spawn_metrics_upkeep(handle: PrometheusHandle) -> JoinHandle<()> {
         loop {
             interval.tick().await;
             handle.run_upkeep();
+        }
+    })
+}
+
+/// Publish the SQLx pool gauges. `max` comes from validated configuration so
+/// the saturation alert does not depend on the pool having grown.
+pub fn record_db_pool_metrics(pool: &PgPool, max_connections: u32) {
+    let idle = pool.num_idle() as u32;
+    let size = pool.size();
+    let active = size.saturating_sub(idle);
+
+    metrics::gauge!("db_pool_connections", "state" => "active").set(f64::from(active));
+    metrics::gauge!("db_pool_connections", "state" => "idle").set(f64::from(idle));
+    metrics::gauge!("db_pool_connections", "state" => "max").set(f64::from(max_connections));
+}
+
+/// Refresh the pool gauges on the scrape cadence.
+pub fn spawn_db_pool_metrics(pool: PgPool, max_connections: u32) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(POOL_METRICS_INTERVAL);
+        loop {
+            interval.tick().await;
+            record_db_pool_metrics(&pool, max_connections);
         }
     })
 }

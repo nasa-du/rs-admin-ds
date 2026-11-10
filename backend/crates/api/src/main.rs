@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rs_admin_api::{
     AppState, AuthServices, build_router, init_logging, install_metrics_recorder, metrics_router,
-    spawn_metrics_upkeep, store_pool_settings,
+    shutdown_signal, spawn_db_pool_metrics, spawn_metrics_upkeep, store_pool_settings,
 };
 use rs_admin_config::Config;
 use rs_admin_security::TrustedProxies;
@@ -64,6 +64,10 @@ async fn run() -> Result<()> {
 
     let metrics_handle = install_metrics_recorder()?;
     let upkeep = spawn_metrics_upkeep(metrics_handle.clone());
+    let pool_metrics = spawn_db_pool_metrics(
+        database.pool().clone(),
+        config.database.pool.max_connections,
+    );
 
     let app = build_router(
         AppState::with_auth(database.clone(), auth)
@@ -109,6 +113,7 @@ async fn run() -> Result<()> {
     finish(metrics_result)?;
 
     upkeep.abort();
+    pool_metrics.abort();
     database.close().await;
     tracing::info!("shutdown complete");
     Ok(())
@@ -130,35 +135,4 @@ fn finish(result: Result<std::io::Result<()>, tokio::task::JoinError>) -> Result
         Err(error) if error.is_cancelled() => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "failed to listen for ctrl-c");
-        }
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to listen for SIGTERM");
-                std::future::pending::<()>().await;
-            }
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    tracing::info!("shutdown signal received");
 }

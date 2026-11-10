@@ -15,6 +15,7 @@ getrandom.workspace = true
 hmac.workspace = true
 ipnet.workspace = true
 jsonwebtoken.workspace = true
+metrics.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

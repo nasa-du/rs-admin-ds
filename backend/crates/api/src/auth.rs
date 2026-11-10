@@ -464,7 +464,12 @@ pub async fn login(
 
     // The IP and global layers are checked before any hashing: a locked layer
     // refuses without paying for Argon2 (spec §8.3).
-    ensure_shared_layers_unlocked(services, &state, audit.client_ip).await?;
+    if let Err(error) = ensure_shared_layers_unlocked(services, &state, audit.client_ip).await {
+        if error.code() == ErrorCode::RateLimited {
+            record_login_attempt("failure", "rate_limited");
+        }
+        return Err(error);
+    }
 
     let user = find_user(&state.database, normalized.as_ref()).await?;
 
@@ -485,6 +490,7 @@ pub async fn login(
             .verify_dummy()
             .await
             .map_err(password_unavailable)?;
+        record_login_attempt("failure", "locked");
         return Err(login_locked(seconds));
     }
 
@@ -494,7 +500,10 @@ pub async fn login(
     match (user, password_matches) {
         (Some(user), true) => {
             let outcome = outcome.expect("verified password has an outcome");
-            complete_login(&state, services, user, outcome.replacement_hash, audit).await
+            let response =
+                complete_login(&state, services, user, outcome.replacement_hash, audit).await?;
+            record_login_attempt("success", "success");
+            Ok(response)
         }
         (Some(user), false) => {
             let lock = record_counted_failure(
@@ -510,6 +519,7 @@ pub async fn login(
                 FailureSource::Login,
             )
             .await?;
+            record_login_failure(lock.as_ref());
             Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error))
         }
         (None, _) => {
@@ -527,6 +537,7 @@ pub async fn login(
                 FailureSource::Login,
             )
             .await?;
+            record_login_failure(lock.as_ref());
             Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error))
         }
     }
@@ -1864,6 +1875,8 @@ async fn reject_refresh_reuse(
     request_id: Uuid,
     user_agent: Option<String>,
 ) -> Result<ApiError, ApiError> {
+    metrics::counter!("auth_refresh_reuse_detected_total").increment(1);
+
     revoke_session_family(
         transaction,
         context.token.session_id,
@@ -2019,6 +2032,7 @@ async fn complete_login(
         .map_err(dependency_unavailable)?
     {
         transaction.rollback().await.ok();
+        record_login_attempt("failure", "locked");
         return Err(login_locked(seconds));
     }
 
@@ -2039,6 +2053,7 @@ async fn complete_login(
             FailureSource::Login,
         )
         .await?;
+        record_login_failure(lock.as_ref());
         return Err(lock.map_or_else(|| ApiError::new(ErrorCode::InvalidCredentials), lock_error));
     }
 
@@ -2272,6 +2287,27 @@ fn lock_error(refusal: LockRefusal) -> ApiError {
     let seconds = refusal.retry_after_seconds.max(1).to_string();
     let value = HeaderValue::from_str(&seconds).expect("retry seconds are header-safe");
     ApiError::new(refusal.code).with_header(RETRY_AFTER, value)
+}
+
+/// Record one login outcome. Labels are a fixed, bounded vocabulary
+/// (`bad_credentials`, `locked`, `rate_limited`, `success`); no identifier,
+/// address or request id may ever become a label (ADR-0005 §9.6).
+fn record_login_attempt(result: &'static str, reason: &'static str) {
+    metrics::counter!(
+        "auth_login_attempts_total",
+        "result" => result,
+        "reason" => reason
+    )
+    .increment(1);
+}
+
+fn record_login_failure(lock: Option<&LockRefusal>) {
+    let reason = match lock.map(|refusal| refusal.code) {
+        Some(ErrorCode::RateLimited) => "rate_limited",
+        Some(ErrorCode::LoginLocked) => "locked",
+        _ => "bad_credentials",
+    };
+    record_login_attempt("failure", reason);
 }
 
 fn rate_limited(retry_after_seconds: i64) -> ApiError {

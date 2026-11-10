@@ -216,7 +216,7 @@ expect_compose \
 
 expect_compose \
     "db mounts pgBackRest repository secrets" \
-    '[.services.db.secrets[] | .source] | sort == ["backup_password", "backup_repo_cipher_pass", "backup_s3_access_key", "backup_s3_secret_key", "cleanup_password", "internal_ca", "migrator_password", "postgres_admin_password", "postgres_server_cert", "postgres_server_key", "runtime_password"]'
+    '[.services.db.secrets[] | .source] | sort == ["backup_password", "backup_repo_cipher_pass", "backup_s3_access_key", "backup_s3_secret_key", "cleanup_password", "internal_ca", "migrator_password", "monitor_password", "postgres_admin_password", "postgres_server_cert", "postgres_server_key", "runtime_password"]'
 
 expect_compose \
     "db shares the PostgreSQL socket with the backup job" \
@@ -310,6 +310,11 @@ expect_file \
     'backup_s3_access_key'
 
 expect_file \
+    "the monitoring password is copied for the postgres user" \
+    "deploy/db/entrypoint.sh" \
+    'monitor_password'
+
+expect_file \
     "the cleanup role can read the migration version" \
     "deploy/db/grants.sql" \
     'GRANT SELECT ON TABLE _sqlx_migrations TO rs_admin_runtime, rs_admin_cleanup'
@@ -387,7 +392,10 @@ expect_compose \
 # --- Gateway configuration --------------------------------------------------
 gateway="deploy/gateway/templates/default.conf.template"
 expect_file "gateway terminates TLS on the unprivileged port" "$gateway" 'listen 8443 ssl'
-expect_file "gateway enables TLS 1.2 and 1.3" "$gateway" 'ssl_protocols TLSv1\.2 TLSv1\.3'
+tls_snippet="deploy/gateway/snippets/tls.conf"
+expect_file "gateway enables TLS 1.2 and 1.3" "$tls_snippet" 'ssl_protocols TLSv1\.2 TLSv1\.3'
+expect_file "gateway loads the certificate from a mounted secret" "$tls_snippet" 'ssl_certificate /run/secrets/tls_certificate;'
+expect_file "gateway shares one TLS snippet" "$gateway" 'include /etc/nginx/snippets/tls\.conf;'
 expect_file "gateway redirects HTTP to HTTPS with 301" "$gateway" 'return 301 https://'
 expect_file "gateway emits HSTS" "$gateway" 'Strict-Transport-Security.*max-age=31536000.*includeSubDomains'
 expect_file "gateway applies the auth rate limit" "$gateway" 'limit_req_zone \$binary_remote_addr zone=auth:10m rate=60r/m;'
@@ -432,6 +440,10 @@ expect_file "db creates the migration role" "deploy/db/init/00-rs-admin-roles.sh
 expect_file "db creates the runtime role" "deploy/db/init/00-rs-admin-roles.sh" 'CREATE ROLE rs_admin_runtime'
 expect_file "db creates the cleanup role" "deploy/db/init/00-rs-admin-roles.sh" 'CREATE ROLE rs_admin_cleanup'
 expect_file "db creates the backup role" "deploy/db/init/00-rs-admin-roles.sh" 'CREATE ROLE rs_admin_backup'
+expect_file "db creates the monitoring role" "deploy/db/init/00-rs-admin-roles.sh" 'CREATE ROLE rs_admin_monitor'
+expect_file "db grants pg_monitor to the monitoring role" "deploy/db/init/00-rs-admin-roles.sh" 'GRANT pg_monitor TO rs_admin_monitor'
+expect_file "production db accepts the monitoring role on the data subnet" "deploy/db/pg_hba.conf" '^hostssl .* rs_admin_monitor +172\.29\.0\.0/16 +scram-sha-256$'
+expect_file "development db accepts the monitoring role on loopback" "deploy/db/pg_hba.dev.conf" '^hostssl .* rs_admin_monitor +127\.0\.0\.1/32 +scram-sha-256$'
 expect_file "runtime may only read and append audit rows" "deploy/db/grants.sql" 'GRANT SELECT, INSERT ON TABLE audit_logs TO rs_admin_runtime'
 expect_file "runtime may not mutate audit rows" "deploy/db/grants.sql" 'REVOKE ALL ON TABLE audit_logs FROM rs_admin_runtime'
 expect_file "runtime may read and advance the chain head" "deploy/db/grants.sql" 'GRANT SELECT, UPDATE ON TABLE audit_chain_head TO rs_admin_runtime'
@@ -472,6 +484,18 @@ if command -v openssl >/dev/null 2>&1; then
         "generated repository cipher pass exists" \
         "$secret_dir/backup_repo_cipher_pass" \
         '^[0-9a-f]{64}$'
+    expect_file \
+        "generated monitor password exists" \
+        "$secret_dir/monitor_password" \
+        '^[0-9a-f]{48}$'
+    expect_file \
+        "generated Grafana admin password exists" \
+        "$secret_dir/grafana_admin_password" \
+        '^[0-9a-f]{48}$'
+    expect_file \
+        "generated alert webhook file exists and is empty by default" \
+        "$secret_dir/alert_webhook_url" \
+        '^$'
     expect_file \
         "generated database server certificate is valid PEM" \
         "$secret_dir/postgres_server_cert" \

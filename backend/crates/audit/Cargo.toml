@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 chrono.workspace = true
 hmac.workspace = true
+metrics.workspace = true
 rs-admin-security.workspace = true
 rs-admin-store.workspace = true
 serde.workspace = true
@@ -21,6 +22,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 
 [lints]

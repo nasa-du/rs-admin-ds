@@ -9,9 +9,17 @@ use auth_support::{
 };
 use axum::http::{StatusCode, header};
 use chrono::{DateTime, Utc};
+use metrics_exporter_prometheus::PrometheusHandle;
+use rs_admin_api::install_metrics_recorder;
 use rs_admin_security::hash_refresh_token;
 use sqlx::PgPool;
+use std::sync::OnceLock;
 use uuid::Uuid;
+
+fn recorder() -> &'static PrometheusHandle {
+    static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+    HANDLE.get_or_init(|| install_metrics_recorder().expect("install recorder"))
+}
 
 #[derive(sqlx::FromRow)]
 struct StoredToken {
@@ -195,6 +203,7 @@ async fn a_retry_within_grace_returns_the_same_successor_without_a_rotation(pool
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn reuse_outside_grace_revokes_the_family_and_writes_a_critical_audit(pool: PgPool) {
+    let handle = recorder();
     let app = app(&pool).await;
     let user_id = insert_user(&pool, NewUser::active("alice", "alice@example.com")).await;
 
@@ -221,6 +230,12 @@ async fn reuse_outside_grace_revokes_the_family_and_writes_a_critical_audit(pool
     let body = json(&body);
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(problem_code(&body), "refresh_reuse_detected");
+    assert!(
+        handle
+            .render()
+            .contains("auth_refresh_reuse_detected_total"),
+        "reuse detection must increment its counter"
+    );
     let cookie = headers
         .get(header::SET_COOKIE)
         .and_then(|value| value.to_str().ok())

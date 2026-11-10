@@ -14,7 +14,7 @@ listable). File modes are driven by which container user must read them:
 | `database_url` | api | `0440 root:10001` |
 | `database_url_migrator` | migrate | `0440 root:10001` |
 | `database_url_cleanup` | maintenance | `0440 root:10001` |
-| `internal_ca.pem` | api, migrate, maintenance, db | `0440 root:10001` |
+| `internal_ca.pem` | api, migrate, maintenance, db, postgres_exporter | `0440 root:10001` |
 | `jwt-ed25519-private.pem` | api | `0440 root:10001` |
 | `refresh-derivation.key` | api | `0440 root:10001` |
 | `throttle.key` | api | `0440 root:10001` |
@@ -28,18 +28,23 @@ listable). File modes are driven by which container user must read them:
 | `runtime_password` | db entrypoint (root) | `0400 root` |
 | `cleanup_password` | db entrypoint (root) | `0400 root` |
 | `backup_password` | db entrypoint (root) | `0400 root` |
+| `monitor_password` | db entrypoint (root), postgres_exporter (uid 10001) | `0440 root:10001` |
 | `backup_s3_access_key` | db entrypoint (root), backup (uid 70) | `0440 root:70` |
 | `backup_s3_secret_key` | db entrypoint (root), backup (uid 70) | `0440 root:70` |
 | `backup_repo_cipher_pass` | db entrypoint (root), backup (uid 70) | `0440 root:70` |
-| `alert_webhook_url` | systemd `notify-failure.sh` (host, root) | `0400 root` |
+| `alert_webhook_url` | alert-webhook adapter (uid 10001), systemd `notify-failure.sh` (host, root) | `0440 root:10001` |
+| `grafana_admin_password` | Grafana (uid 472) | `0440 root:472` |
 
-The group IDs are the container users: `10001` is `rs-admin` in the API image,
-`101` is `nginx` in the gateway image, and `70` is `postgres` in the database
-and backup images. Compose file secrets keep the host file's mode in
-non-Swarm mode, so a `0400 root` file cannot be read by a non-root container
-process. That is why the API, gateway and backup files are group-readable.
-The database entrypoint runs as root and copies its secrets to
-`/run/rs-admin-secrets` for the postgres-owned `archive_command`.
+The group IDs are the container users: `10001` is the `rs-admin` user in the
+API image and is also used by the alert-webhook and postgres_exporter
+containers, `101` is `nginx` in the gateway image, `70` is `postgres` in the
+database and backup images, and `472` is `grafana`. Compose file secrets keep
+the host file's mode in non-Swarm mode, so a `0400 root` file cannot be read by
+a non-root container process. That is why the API, gateway, observability and
+backup files are group-readable. The database entrypoint runs as root, reads
+the monitoring password before the init script runs as `postgres`, and copies
+its secrets to `/run/rs-admin-secrets` for the postgres-owned
+`archive_command`.
 
 File contents:
 
@@ -50,7 +55,9 @@ File contents:
 | `database_url_cleanup` | the same DSN for `rs_admin_cleanup`, used only by the maintenance job |
 | `backup_s3_access_key` / `backup_s3_secret_key` | S3-compatible repository credentials for pgBackRest |
 | `backup_repo_cipher_pass` | pgBackRest repository encryption passphrase (at least 32 bytes; keep a copy in the password manager, losing it makes the repository unreadable) |
-| `alert_webhook_url` | optional generic webhook for failed systemd timer jobs; not mounted into a container |
+| `monitor_password` | password for the read-only `rs_admin_monitor` role used by postgres_exporter |
+| `alert_webhook_url` | chat webhook URL (Feishu/DingTalk/WeCom/generic); may be empty to accept alerts without delivery. Used by the Alertmanager adapter and the systemd failure hook |
+| `grafana_admin_password` | initial Grafana admin password |
 | `internal_ca.pem` | PEM CA that signed the PostgreSQL server certificate |
 | `postgres_server_cert` / `postgres_server_key` | PostgreSQL server certificate and key, SAN includes `db` |
 | `jwt-ed25519-private.pem` | Ed25519 PKCS#8 private key (`JWT_EDDSA_PRIVATE_KEY_FILE`) |

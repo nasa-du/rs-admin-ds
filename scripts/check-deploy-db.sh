@@ -166,9 +166,9 @@ else
     pass "database server processes run as a non-root user"
 fi
 expect_super \
-    "all four application roles use SCRAM" \
+    "all five application roles use SCRAM" \
     "SELECT count(*) FROM pg_authid WHERE rolname LIKE 'rs_admin_%' AND rolpassword LIKE 'SCRAM-SHA-256\$%'" \
-    "4"
+    "5"
 
 if docker exec -e RUNTIME_DSN="$runtime_dsn" "$container" sh -c \
     'psql "$RUNTIME_DSN" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --command="SELECT MAX(version) FROM _sqlx_migrations"' \
@@ -230,6 +230,19 @@ expect_super \
     "backup role can run the non-superuser backup protocol" \
     "SELECT has_function_privilege('rs_admin_backup', 'pg_backup_start(text,boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_backup_stop(boolean)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_create_restore_point(text)', 'EXECUTE'), has_function_privilege('rs_admin_backup', 'pg_switch_wal()', 'EXECUTE')" \
     "t|t|t|t"
+expect_super \
+    "monitor role inherits pg_monitor but cannot read application tables" \
+    "SELECT pg_has_role('rs_admin_monitor', 'pg_monitor', 'USAGE'), has_table_privilege('rs_admin_monitor', 'users', 'SELECT')" \
+    "t|f"
+
+monitor_dsn="postgres://rs_admin_monitor:$(cat "$secret_dir/monitor_password")@127.0.0.1:5432/rs_admin?sslmode=verify-full&sslrootcert=/run/rs-admin-secrets/internal_ca"
+if docker exec -e MONITOR_DSN="$monitor_dsn" "$container" sh -c \
+    'psql "$MONITOR_DSN" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --command="SELECT failed_count FROM pg_stat_archiver"' \
+    >/dev/null 2>&1; then
+    pass "monitor role reads archiver statistics over verified TLS"
+else
+    fail "monitor role reads archiver statistics over verified TLS"
+fi
 
 if [[ "$failures" -ne 0 ]]; then
     printf '\n%d database deployment check(s) failed\n' "$failures" >&2

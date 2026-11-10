@@ -1,0 +1,77 @@
+# Prometheus for the single-host stack (ADR-0008 §6.4–§6.6).
+#
+# Scrape interval and retention are part of the contract: 15 seconds and 30
+# days. The API metrics listener is internal (api:9100) and bypasses the public
+# gateway; `/metrics` is never exposed on the admin or API host.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: production
+    stack: rs-admin
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: rs-admin-api
+    static_configs:
+      - targets: ["api:9100"]
+        labels:
+          service: rs-admin-api
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres_exporter:9187"]
+        labels:
+          service: rs-admin-postgres
+
+  - job_name: node
+    static_configs:
+      - targets: ["node_exporter:9100"]
+        labels:
+          service: rs-admin-host
+
+  # Certificate expiry is derived from the certificate the gateway presents.
+  # Verification is disabled because the probe only needs the notAfter value;
+  # the gateway is reachable solely over the internal edge network.
+  - job_name: blackbox-tls
+    metrics_path: /probe
+    params:
+      module: [gateway_tls]
+    static_configs:
+      - targets: ["https://gateway:8443/"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox_exporter:9115
+
+  # Internal readiness probe (ADR-0008 §6.8 amendment). The public gateway
+  # never exposes /health/*; this job catches a live API that cannot reach the
+  # database or is behind the embedded migrator.
+  - job_name: blackbox-api-ready
+    metrics_path: /probe
+    params:
+      module: [api_ready]
+    static_configs:
+      - targets: ["http://api:8080/health/ready"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox_exporter:9115
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

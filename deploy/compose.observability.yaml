@@ -1,0 +1,249 @@
+# Observability stack for the single-host deployment (ADR-0008 §6).
+#
+#   docker compose -f deploy/compose.observability.yaml up -d
+#
+# Start the application stack first: this file joins the external networks
+# `rs-admin_edge` (Prometheus scrapes api:9100, blackbox probes gateway:8443)
+# and `rs-admin_data` (postgres_exporter reaches db:5432). Grafana is the only
+# published service and binds to loopback only; reach it through an SSH tunnel.
+#
+# Secrets come from the same directory as the application stack:
+#   alert_webhook_url, grafana_admin_password, monitor_password, internal_ca.pem
+#
+# The external uptime provider is intentionally outside this file; see
+# observability/uptime/README.md.
+
+name: rs-admin-observability
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging: *default-logging
+
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.0.1}
+    <<: *hardening
+    networks:
+      - default
+      - edge
+      - data
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 30s
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.28.0}
+    <<: *hardening
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./observability/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9093/-/ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 15s
+
+  alert-webhook:
+    image: ${API_IMAGE:-rs-admin-api:local}
+    entrypoint: ["/usr/local/bin/rs-admin-alert-webhook"]
+    <<: *hardening
+    environment:
+      ALERT_WEBHOOK_URL_FILE: /run/secrets/alert_webhook_url
+      ALERT_WEBHOOK_KIND: ${ALERT_WEBHOOK_KIND:-feishu}
+      ALERT_ENVIRONMENT: ${ALERT_ENVIRONMENT:-production}
+      ALERT_DIGEST_HOUR_UTC: ${ALERT_DIGEST_HOUR_UTC:-9}
+      ALERT_RUNBOOK_BASE_URL: ${ALERT_RUNBOOK_BASE_URL:-https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      TZ: UTC
+    secrets:
+      - alert_webhook_url
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    stop_grace_period: 10s
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.4.0}
+    <<: *hardening
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:3000}
+      TZ: UTC
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    stop_grace_period: 15s
+
+  loki:
+    image: ${LOKI_IMAGE:-grafana/loki:3.3.2}
+    <<: *hardening
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    volumes:
+      - ./observability/loki:/etc/loki:ro
+      - loki-data:/loki
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    stop_grace_period: 30s
+
+  promtail:
+    image: ${PROMTAIL_IMAGE:-grafana/promtail:3.3.2}
+    <<: *hardening
+    # Documented exception: Docker's json-file logs under
+    # /var/lib/docker/containers are root-owned, so Promtail cannot read them
+    # as an unprivileged user. All capabilities are dropped and the root
+    # filesystem is read-only.
+    user: "0:0"
+    command: ["-config.file=/etc/promtail/promtail-config.yaml"]
+    volumes:
+      - ./observability/promtail:/etc/promtail:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail-positions:/var/lib/promtail
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 10s
+
+  postgres_exporter:
+    image: ${POSTGRES_EXPORTER_IMAGE:-prometheuscommunity/postgres-exporter:v0.16.0}
+    <<: *hardening
+    # Match the API group so the mounted CA and monitoring password can stay
+    # 0440 root:10001 like the other application secrets.
+    user: "10001:10001"
+    networks:
+      - default
+      - data
+    environment:
+      # Override for an external database; the DSN must keep verify-full.
+      DATA_SOURCE_URI: ${POSTGRES_EXPORTER_URI:-db:5432/rs_admin?sslmode=verify-full&sslrootcert=/run/secrets/internal_ca}
+      DATA_SOURCE_USER: ${POSTGRES_EXPORTER_USER:-rs_admin_monitor}
+      DATA_SOURCE_PASS_FILE: /run/secrets/monitor_password
+    secrets:
+      - monitor_password
+      - internal_ca
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 10s
+
+  node_exporter:
+    image: ${NODE_EXPORTER_IMAGE:-prom/node-exporter:v1.8.2}
+    <<: *hardening
+    pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker/.+)($$|/)
+      - --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - textfiles:/var/lib/node_exporter/textfile_collector:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+  textfile-merge:
+    image: ${BUSYBOX_IMAGE:-busybox:1.37.0}
+    <<: *hardening
+    # Documented exception: the named volume is root-owned, so the merge
+    # helper must run as root. It has no network, drops all capabilities and
+    # writes only the read-only-collected textfile volume.
+    user: "0:0"
+    network_mode: none
+    command: ["sh", "/scripts/merge.sh"]
+    volumes:
+      - ./observability/textfile-merge/merge.sh:/scripts/merge.sh:ro
+      - ${RS_ADMIN_METRICS_DIR:-./metrics}:/in/backup:ro
+      - ${RS_ADMIN_MAINTENANCE_METRICS_DIR:-./metrics-maintenance}:/in/maintenance:ro
+      - textfiles:/out
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+
+  blackbox_exporter:
+    image: ${BLACKBOX_EXPORTER_IMAGE:-prom/blackbox-exporter:v0.25.0}
+    <<: *hardening
+    networks:
+      - default
+      - edge
+    command: ["--config.file=/etc/blackbox_exporter/config.yml"]
+    volumes:
+      - ./observability/blackbox:/etc/blackbox_exporter:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+networks:
+  # Application edge network (`docker compose -f deploy/compose.yaml up`).
+  edge:
+    external: true
+    name: rs-admin_edge
+  # Application data network. It always exists once the application stack is
+  # up; postgres_exporter must be on it to reach a local `db`.
+  data:
+    external: true
+    name: rs-admin_data
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+  loki-data:
+  promtail-positions:
+  textfiles:
+
+secrets:
+  alert_webhook_url:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/alert_webhook_url
+  grafana_admin_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/grafana_admin_password
+  monitor_password:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/monitor_password
+  internal_ca:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/internal_ca.pem

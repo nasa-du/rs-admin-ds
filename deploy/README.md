@@ -161,8 +161,11 @@ With `scripts/release.sh` (and the release workflow), set
 the one-shot migration and keeps the 120-second readiness/rollback behaviour.
 
 The DSN must keep `sslmode=verify-full` and a reachable `sslrootcert`. The
-external operator owns the four role definitions and their grants; run
+external operator owns the five role definitions and their grants; run
 `migrate` as `rs_admin_migrator` and ensure `deploy/db/grants.sql` was applied.
+Set `POSTGRES_EXPORTER_URI` (and `POSTGRES_EXPORTER_USER` if not
+`rs_admin_monitor`) for the observability stack, and place the external
+database CA at `<secrets>/internal_ca.pem`.
 
 ## Database roles
 
@@ -172,6 +175,7 @@ external operator owns the four role definitions and their grants; run
 | `rs_admin_runtime` | API | DML only; `audit_logs` INSERT/SELECT; `audit_chain_head` SELECT/UPDATE; `_sqlx_migrations` SELECT |
 | `rs_admin_cleanup` | retention maintenance | DELETE on application tables including `audit_logs`; SELECT/UPDATE on `audit_chain_head`; SELECT on `_sqlx_migrations` |
 | `rs_admin_backup` | pgBackRest | LOGIN REPLICATION + `pg_read_all_data`, `pg_read_all_settings`, `pg_monitor` |
+| `rs_admin_monitor` | postgres_exporter | LOGIN + `pg_monitor` only; no table reads |
 
 All roles authenticate with SCRAM over TLS. `pg_hba.conf` rejects md5 and
 unencrypted host connections. The bootstrap superuser exists only for first
@@ -230,11 +234,11 @@ The maintenance job writes
 `maintenance_duration_seconds` and `maintenance_rows_deleted{kind}` so cleanup
 latency and volume are observable.
 
-Mount both directories into node_exporter's textfile collector; the
-observability ticket (#51) wires the collector and the Prometheus rule.
-`BackupStale` (`time() - last_success > 93600`, ADR-0008 §6.6) is the primary
-alert; a failed job also exits non-zero and triggers `rs-admin-alert@.service`
-when a webhook is configured.
+The observability stack mounts both directories and merges the two textfiles
+into node_exporter's textfile collector. `BackupStale`
+(`time() - last_success > 93600`, ADR-0008 §6.6) is the primary alert; a failed
+job also exits non-zero and triggers `rs-admin-alert@.service` when a webhook
+is configured.
 
 Install the host timers (host timezone is UTC). The units assume the
 repository checkout is `/opt/rs-admin`; adjust the paths if it lives
@@ -282,6 +286,57 @@ With an external database, remove the `local-db` profile: the external
 operator owns backup, WAL archiving, restore drills and the `database_url_cleanup`
 DSN. The maintenance timer can still run with `--profile tools`.
 
+## Observability stack
+
+The application stack and the observability stack are separate Compose files
+(ADR-0008 §6). Start the application first so the external `rs-admin_edge` and
+`rs-admin_data` networks exist:
+
+```sh
+cd deploy
+docker compose --profile local-db up -d
+docker compose -f compose.observability.yaml up -d
+```
+
+The observability file runs Prometheus, Alertmanager, Grafana, Loki, Promtail,
+postgres_exporter, node_exporter, blackbox_exporter, the alert webhook adapter
+and a small textfile-merge sidecar:
+
+| Service | Purpose |
+|---|---|
+| `prometheus` | Scrapes `api:9100`, exporters and the blackbox TLS probe; 15 s interval, 30-day retention |
+| `alertmanager` | Severity routing to the adapter; critical immediately, warning for the daily digest |
+| `alert-webhook` | The `rs-admin-alert-webhook` binary from the API image; Feishu/DingTalk/WeCom/generic formatting |
+| `grafana` | Provisioned Auth, API and PostgreSQL/Host dashboards; loopback port 3000 |
+| `loki` / `promtail` | Docker stdout collection with 14-day retention and credential redaction |
+| `postgres_exporter` | Connections, archiver and database statistics via `rs_admin_monitor` |
+| `node_exporter` | Host CPU/memory/disk and the backup/maintenance textfile metrics |
+| `blackbox_exporter` | Gateway certificate expiry and internal `/health/ready` probing |
+| `textfile-merge` | Copies the backup and maintenance textfiles into the collector volume |
+
+Promtail and `textfile-merge` are the only root containers in this stack:
+Promtail must read root-owned Docker log files, and the merge helper writes the
+root-owned textfile volume. Both drop all capabilities, have read-only root
+filesystems and publish no ports.
+
+Grafana is the only published observability port and binds to `127.0.0.1`; use
+an SSH tunnel. Alert webhook credentials, the Grafana admin password and the
+monitoring password live in the secrets directory (see
+[secrets/README.md](./secrets/README.md)).
+
+Alert runbook links point to
+[`docs/runbooks/alerting.md`](../docs/runbooks/alerting.md). The external
+uptime provider is configured outside the host; see
+[`observability/uptime/README.md`](./observability/uptime/README.md). In
+particular, `/health/ready` remains internal-only per ADR-0008's 2026-11-10
+amendment; `ApiDown` covers readiness and the provider probes the public SPA.
+
+Static observability checks run in CI:
+
+```sh
+./scripts/check-observability.sh
+```
+
 ## Edge behavior
 
 - HTTP redirects to HTTPS with `301`; ACME HTTP-01 challenges are served from
@@ -319,12 +374,18 @@ ample room for migration, maintenance, backup and exporter connections under
 
 ## Verification
 
-Static acceptance checks (also run in CI):
+Static acceptance checks and integration checks (also run in CI):
 
 ```sh
-./scripts/check-deploy.sh
+./scripts/check-deploy.sh          # topology, hardening, secrets, gateway, SPA
+./scripts/check-deploy-db.sh       # TLS-only SCRAM, roles, migrations, grants
+./scripts/check-deploy-edge.sh     # real nginx TLS/host routing/rate limit
+./scripts/check-observability.sh   # compose, rules, dashboards, retention, redaction
 ```
 
 They assert the service topology, published ports, non-root/read-only/no-new-
 privileges hardening, healthcheck, secret wiring, gateway TLS/rate-limit/deny
-rules, SPA caching/CSP, pinned images, and database role grants.
+rules, SPA caching/CSP, pinned images, database role grants, the full alert
+catalog with runbook links, three Grafana dashboards, 14-day Loki retention and
+Promtail redaction. The observability check also runs `promtool`, `amtool` and
+the Loki/Promtail `-verify-config` modes from the pinned images.

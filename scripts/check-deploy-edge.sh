@@ -253,6 +253,20 @@ else
     fail "rate-limited responses use the problem+json contract"
 fi
 
+# --- Internal certificate probe --------------------------------------------
+# blackbox_exporter reaches this SNI over the edge network to read the
+# certificate's notAfter; it does not verify the chain because the probe only
+# inspects expiry.
+probe_status="$(curl --noproxy '*' --silent --insecure --output /dev/null \
+    --write-out '%{http_code}' \
+    --resolve "gateway:${https_port}:127.0.0.1" \
+    "https://gateway:${https_port}/")"
+if [[ "$probe_status" == "204" ]]; then
+    pass "internal TLS probe serves the gateway certificate"
+else
+    fail "internal TLS probe serves the gateway certificate ($probe_status)"
+fi
+
 # --- Unknown SNI ------------------------------------------------------------
 if curl --noproxy '*' --silent --output /dev/null \
     --resolve "unknown.example.com:${https_port}:127.0.0.1" \

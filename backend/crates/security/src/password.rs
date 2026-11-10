@@ -11,7 +11,7 @@ use argon2::password_hash::{PasswordHasher as _, PasswordVerifier as _};
 use argon2::{Algorithm, Argon2, Params, Version};
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use unicode_normalization::UnicodeNormalization;
 
@@ -224,9 +224,8 @@ impl PasswordService {
         let _permit = self.acquire().await?;
         let inner = Arc::clone(&self.inner);
         let password = password.to_owned();
-        tokio::task::spawn_blocking(move || inner.hash_blocking(&password))
+        self.run_blocking(move || inner.hash_blocking(&password))
             .await
-            .map_err(|_| PasswordError::TaskFailed)?
     }
 
     /// Verify a password and, on success, produce a replacement hash when the
@@ -240,9 +239,8 @@ impl PasswordService {
         let inner = Arc::clone(&self.inner);
         let password = password.to_owned();
         let stored_hash = stored_hash.to_owned();
-        tokio::task::spawn_blocking(move || inner.verify_blocking(&password, &stored_hash))
+        self.run_blocking(move || inner.verify_blocking(&password, &stored_hash))
             .await
-            .map_err(|_| PasswordError::TaskFailed)?
     }
 
     /// Run a verification against the dummy hash. Used for unknown identifiers
@@ -251,9 +249,24 @@ impl PasswordService {
     pub async fn verify_dummy(&self) -> Result<(), PasswordError> {
         let _permit = self.acquire().await?;
         let inner = Arc::clone(&self.inner);
-        tokio::task::spawn_blocking(move || inner.verify_dummy_blocking())
+        self.run_blocking(move || inner.verify_dummy_blocking())
             .await
-            .map_err(|_| PasswordError::TaskFailed)?
+    }
+
+    /// Run one Argon2 operation on a blocking thread and record its duration.
+    /// Only the operation itself is timed; the permit wait is reported through
+    /// the 503 path instead of looking like slow hashing.
+    async fn run_blocking<T, F>(&self, operation: F) -> Result<T, PasswordError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, PasswordError> + Send + 'static,
+    {
+        let started = Instant::now();
+        let result = tokio::task::spawn_blocking(operation)
+            .await
+            .map_err(|_| PasswordError::TaskFailed)?;
+        metrics::histogram!("auth_password_hash_seconds").record(started.elapsed().as_secs_f64());
+        result
     }
 
     async fn acquire(&self) -> Result<tokio::sync::SemaphorePermit<'_>, PasswordError> {

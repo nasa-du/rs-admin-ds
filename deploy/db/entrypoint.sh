@@ -39,6 +39,7 @@ for name in \
     runtime_password \
     cleanup_password \
     backup_password \
+    monitor_password \
     backup_s3_access_key \
     backup_s3_secret_key \
     backup_repo_cipher_pass

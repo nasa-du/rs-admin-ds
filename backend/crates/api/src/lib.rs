@@ -4,6 +4,7 @@
 //! routing failures) carries a server-generated request id, RFC 7807 problem
 //! details where applicable, and the API security headers.
 
+pub mod alert_webhook;
 mod audit_logs;
 mod auth;
 mod authz;
@@ -25,12 +26,47 @@ mod wire;
 pub use auth::{AuthServiceError, AuthServices};
 pub use error::{ApiError, FieldError, ProblemDetails};
 pub use logging::{LoggingError, build_env_filter, init_logging};
-pub use metrics::{MetricsError, install_metrics_recorder, metrics_router, spawn_metrics_upkeep};
+pub use metrics::{
+    MetricsError, install_metrics_recorder, metrics_router, record_db_pool_metrics,
+    spawn_db_pool_metrics, spawn_metrics_upkeep,
+};
 pub use openapi::openapi_document;
 pub use router::{
     AppState, MAX_IN_FLIGHT_REQUESTS, MAX_JSON_BODY_BYTES, REQUEST_TIMEOUT, build_router,
     with_common_middleware, with_common_middleware_and_timeout,
 };
+
+/// Wait for SIGTERM or Ctrl-C. Shared by the API and alert-webhook runtimes.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::error!(%error, "failed to listen for ctrl-c");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to listen for SIGTERM");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("shutdown signal received");
+}
 
 /// Map validated configuration into store pool settings.
 pub fn store_pool_settings(pool: &rs_admin_config::PoolConfig) -> rs_admin_store::PoolSettings {

@@ -1,0 +1,42 @@
+# Alertmanager routing (ADR-0008 §6.7).
+#
+# Critical alerts go straight to the adapter's immediate receiver. Warnings
+# are grouped and buffered by the adapter into one daily digest. A critical
+# alert inhibits the matching warning while both are firing.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: critical
+  group_by: [alertname, instance, severity]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: critical
+    - matchers:
+        - severity="warning"
+      receiver: warning
+      group_wait: 30s
+      group_interval: 1h
+      repeat_interval: 24h
+
+receivers:
+  - name: critical
+    webhook_configs:
+      - url: http://alert-webhook:8081/alertmanager/critical
+        send_resolved: true
+  - name: warning
+    webhook_configs:
+      - url: http://alert-webhook:8081/alertmanager/warning
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [alertname, instance]

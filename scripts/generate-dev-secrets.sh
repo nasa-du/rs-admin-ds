@@ -107,12 +107,20 @@ migrator_password="$(random_password)"
 runtime_password="$(random_password)"
 cleanup_password="$(random_password)"
 backup_password="$(random_password)"
+monitor_password="$(random_password)"
 
 write_secret postgres_admin_password "$postgres_admin_password"
 write_secret migrator_password "$migrator_password"
 write_secret runtime_password "$runtime_password"
 write_secret cleanup_password "$cleanup_password"
 write_secret backup_password "$backup_password"
+write_secret monitor_password "$monitor_password"
+
+# Observability secrets. The alert webhook file must exist for Compose even
+# when delivery is disabled; an empty file (the development default) means the
+# adapter accepts alerts without sending them.
+write_secret alert_webhook_url ""
+write_secret grafana_admin_password "$(random_password)"
 
 # pgBackRest repository credentials. Development uses placeholder S3 values;
 # the backup job is only meaningful with a reachable S3-compatible repository.
@@ -168,6 +176,9 @@ chmod 0444 \
     "$target/runtime_password" \
     "$target/cleanup_password" \
     "$target/backup_password" \
+    "$target/monitor_password" \
+    "$target/alert_webhook_url" \
+    "$target/grafana_admin_password" \
     "$target/backup_s3_access_key" \
     "$target/backup_s3_secret_key" \
     "$target/backup_repo_cipher_pass" \

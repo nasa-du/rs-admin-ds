@@ -1,0 +1,25 @@
+# Certificate-expiry probe. The gateway has an internal TLS server block for
+# `gateway:8443` that presents the same certificate; verification is disabled
+# because only the certificate's notAfter value is used. Public traffic still
+# uses the normal verified certificate on admin/api hosts.
+
+modules:
+  gateway_tls:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      tls_config:
+        insecure_skip_verify: true
+      headers:
+        Host: gateway
+
+  # Internal readiness probe. It deliberately bypasses the public gateway,
+  # which returns 404 for /health/*; the alert covers live-but-unready cases
+  # such as an unreachable database or a database behind the embedded migrator.
+  api_ready:
+    prober: http
+    timeout: 3s
+    http:
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200]

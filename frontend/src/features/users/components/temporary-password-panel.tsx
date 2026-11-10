@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import { formatDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { copyToClipboard } from '../copy-to-clipboard'
 
 type TemporaryPasswordPanelProps = {
   password: string

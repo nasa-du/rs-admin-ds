@@ -79,6 +79,28 @@ if [[ "$ready" -ne 1 ]]; then
     exit 1
 fi
 
+# The official entrypoint starts a temporary socket-only server for init and
+# then restarts PostgreSQL. Wait for the final TCP listener before opening a
+# host-side connection or the published port may still be down.
+runtime_dsn="$(sed \
+    -e "s#@db:5432#@127.0.0.1:5432#" \
+    -e "s#sslrootcert=/run/secrets/internal_ca#sslrootcert=/run/rs-admin-secrets/internal_ca#" \
+    "$secret_dir/database_url")"
+tcp_ready=0
+for _ in $(seq 1 90); do
+    if docker exec -e RUNTIME_DSN="$runtime_dsn" "$container" sh -c \
+        'psql "$RUNTIME_DSN" --no-psqlrc --command="SELECT 1"' >/dev/null 2>&1; then
+        tcp_ready=1
+        break
+    fi
+    sleep 1
+done
+if [[ "$tcp_ready" -ne 1 ]]; then
+    echo "error: PostgreSQL did not start its final TCP listener" >&2
+    docker logs "$container" 2>&1 | tail -40 >&2
+    exit 1
+fi
+
 host_port="$(docker port "$container" 5432/tcp | head -n 1 | sed 's/.*://')"
 if [[ -z "$host_port" ]]; then
     echo "error: could not determine the published PostgreSQL port" >&2
@@ -147,11 +169,6 @@ expect_super \
     "all four application roles use SCRAM" \
     "SELECT count(*) FROM pg_authid WHERE rolname LIKE 'rs_admin_%' AND rolpassword LIKE 'SCRAM-SHA-256\$%'" \
     "4"
-
-runtime_dsn="$(sed \
-    -e "s#@db:5432#@127.0.0.1:5432#" \
-    -e "s#sslrootcert=/run/secrets/internal_ca#sslrootcert=/run/rs-admin-secrets/internal_ca#" \
-    "$secret_dir/database_url")"
 
 if docker exec -e RUNTIME_DSN="$runtime_dsn" "$container" sh -c \
     'psql "$RUNTIME_DSN" --no-psqlrc --set=ON_ERROR_STOP=1 --tuples-only --command="SELECT MAX(version) FROM _sqlx_migrations"' \

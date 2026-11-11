@@ -71,6 +71,11 @@ and later journeys use the users and roles created earlier. A fresh full run
 is the meaningful result; a single-test rerun assumes the earlier journeys
 already ran against the same database.
 
+`tests/fault-injection.spec.ts` is skipped in this suite. It is the browser
+half of `scripts/fault-injection.sh`: stop the API, verify the retryable
+session error page through the gateway, restart the API and retry. Run it with
+that script, not directly.
+
 ## Journeys
 
 | # | Test | What it proves |

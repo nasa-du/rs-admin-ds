@@ -201,6 +201,10 @@ required_alerts=(
     BackupStale
     DiskSpace
     CertificateExpiry
+    CapacityCpuHigh
+    CapacityMemoryHigh
+    CapacityDatabaseLarge
+    CapacityLoginRateHigh
 )
 
 # Most alerts land on their same-named section of alerting.md. Backup, archive
@@ -214,11 +218,20 @@ declare -A runbook_anchor=(
     [BackupStale]="6-alert-response"
     [PgArchiveFailure]="6-alert-response"
     [CertificateExpiry]="certificateexpiry"
+    # The four capacity triggers share one review section.
+    [CapacityCpuHigh]="capacity-review"
+    [CapacityMemoryHigh]="capacity-review"
+    [CapacityDatabaseLarge]="capacity-review"
+    [CapacityLoginRateHigh]="capacity-review"
 )
 declare -A runbook_heading=(
     [BackupStale]='^## 6\. Alert response$'
     [PgArchiveFailure]='^## 6\. Alert response$'
     [CertificateExpiry]='^## CertificateExpiry$'
+    [CapacityCpuHigh]='^## Capacity review$'
+    [CapacityMemoryHigh]='^## Capacity review$'
+    [CapacityDatabaseLarge]='^## Capacity review$'
+    [CapacityLoginRateHigh]='^## Capacity review$'
 )
 runbook_base="https://github.com/nasa-du/rs-admin-ds/blob/main/"
 

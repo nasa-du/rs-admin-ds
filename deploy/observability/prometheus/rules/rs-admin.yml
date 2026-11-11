@@ -250,6 +250,62 @@ groups:
           description: Users will see TLS errors when the certificate expires. Replace the certificate and reload the gateway now.
           runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/certificate-renewal.md#certificateexpiry
 
+      # Capacity review triggers (spec §10.11). The user/session counts are not
+      # exported as metrics; docs/runbooks/alerting.md#capacity-review runs
+      # them as read-only SQL. These rules cover the continuously measurable
+      # signals.
+      - alert: CapacityCpuHigh
+        expr: |
+          100 - (
+            avg by (instance) (
+              rate(node_cpu_seconds_total{job="node", mode="idle"}[5m])
+            ) * 100
+          ) > 70
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Host CPU has been above 70% for 30 minutes.
+          description: A capacity-review trigger has fired. Re-check the host size, API replica count and database size before the latency SLOs degrade.
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#capacity-review
+
+      - alert: CapacityMemoryHigh
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes{job="node"}
+              / node_memory_MemTotal_bytes{job="node"}
+            )
+          ) * 100 > 80
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Host memory has been above 80% for 30 minutes.
+          description: A capacity-review trigger has fired. Check the Argon2 memory budget, PostgreSQL buffers and container limits.
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#capacity-review
+
+      - alert: CapacityDatabaseLarge
+        expr: pg_database_size_bytes{job="postgres", datname="rs_admin"} > 50 * 1024^3
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: The rs_admin database is larger than 50 GiB.
+          description: A capacity-review trigger has fired. Check retention jobs, audit growth and backup windows before adding disk.
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#capacity-review
+
+      - alert: CapacityLoginRateHigh
+        expr: |
+          sum(rate(auth_login_attempts_total{job="rs-admin-api", result="success"}[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Successful logins exceed 5 per second.
+          description: A capacity-review trigger has fired. The Argon2 semaphore and host CPU are the first limits; re-evaluate the host or replica count.
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#capacity-review
+
       # ExternalUptime is provider-owned: Healthchecks.io/UptimeRobot/Better
       # Stack must alert independently because a rule on this host cannot fire
       # when the host or Prometheus is down. See

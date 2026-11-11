@@ -267,6 +267,11 @@
 
 ## Amendments
 
+- 2026-11-11：[性能/Argon2 基准 + 安全验证/故障注入 + 62 条验收收口](https://github.com/nasa-du/rs-admin-ds/issues/54) 落实 §1.2 的生产基准：
+  - 新增 `backend/crates/security/src/bin/argon2-bench.rs` 与 `scripts/bench-argon2.sh`。基准测量一次完整的 `verify_password`（重新解析 PHC + 校验），按 §1.2 的顺序在超过 300 ms 时回退 `p=1` → `m=32 MiB`，最后以 OWASP 最低档兜底；退出码 0/3/4 分别表示达标、需要回退、硬件不可用。
+  - 在开发主机上以 API 容器的 2-CPU 预算和 4-vCPU 主机基线各测 20 次。更接近 Compose cgroup 限制的是 `--container-cpus 2`（Docker CPU quota，`debian:bookworm-slim` 中运行 release 二进制）：p95 **128.03 ms**（min 119.53 / p50 123.75 / max 129.16）。同机 `taskset -c 0-1` 的 p95 为 143.80 ms，4-vCPU `taskset -c 0-3` 为 114.54 ms。三者均在 100–300 ms 目标内，**最终参数保持 `m=65536 KiB,t=3,p=4`、输出 32 字节、盐 16 字节**。报告见 [`docs/acceptance/argon2-container-2cpu.md`](../acceptance/argon2-container-2cpu.md)、[`argon2-2cpu.md`](../acceptance/argon2-2cpu.md) 与 [`argon2-4cpu.md`](../acceptance/argon2-4cpu.md)。
+  - 该测量是方法学基线，不是生产豁免：首次部署前必须在生产同规格主机、以实际容器 CPU 预算重跑 `scripts/bench-argon2.sh`，并把 `--out` 报告归档到发布记录；主机或容器 CPU 限制变化后同样重跑。
+  - 并发配置说明：§1.6 的公式 `max(1, min(4, CPU 核数 / p))` 在 4 vCPU、`p=4` 时得到 1，但 20 并发登录的 1 s p95 目标要求更多并行哈希；部署通过 `PASSWORD_HASH_CONCURRENCY=4`（`deploy/compose.yaml`）显式使用 4 个许可，与 §1.6 的「内存上限 64 MiB × 并发数 = 256 MiB」一致，并由 `scripts/perf.sh` 的 20 并发验证。该显式值属于部署配置，不改变 ADR 的回退顺序或最低强度。
 - 2026-11-11：[PG18 升级演练 + 运维 runbook 全集](https://github.com/nasa-du/rs-admin-ds/issues/52) 落实 §8.4 的 JWT publish-before-use 轮换：
   - 新增非敏感配置 `JWT_EDDSA_PREVIOUS_KID`，与既有的可选 `JWT_EDDSA_PREVIOUS_PUBLIC_KEY`/`_FILE` 成对出现；只配置其中一个会使启动校验失败，且 previous kid 不得等于当前 kid。
   - 验证器只接受当前 `kid`（当前签名公钥）或 `JWT_EDDSA_PREVIOUS_KID`（previous 公钥），其他 `kid` 仍返回 `UnknownKid`；签名仍以 EdDSA 与本地可信密钥集为准。

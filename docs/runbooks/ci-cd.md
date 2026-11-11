@@ -41,7 +41,19 @@ format, typecheck, the i18n key check, browser-mode tests, the production build
 and a web image build.
 
 Both workflows run after any change to their contract artifacts, so OpenAPI or
-generated-client drift fails the pull request.
+generated-client drift fails the pull request. The backend check also validates
+the acceptance package (`scripts/check-acceptance-docs.sh`) and the harness
+behaviour tests (`scripts/tests/acceptance.sh`).
+
+### Scheduled security scan
+
+`.github/workflows/security.yml` runs weekly (Mondays 04:17 UTC) and on
+demand. It runs `cargo audit`, `bun audit` and Trivy scans of the API, web and
+database images. A CRITICAL finding opens or updates one `[security-scan]`
+issue and the release is frozen until it is fixed or risk-accepted by the
+security owner. HIGH/medium advisories are recorded in the run summary and
+artifacts but do not block PRs; advisory-database churn must not fail a pull
+request. Reproduce locally with `./scripts/security-scan.sh`.
 
 ### Full-stack E2E (pre-release)
 

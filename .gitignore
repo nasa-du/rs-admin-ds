@@ -6,6 +6,7 @@
 # Development key material and production secret mounts
 /deploy/secrets-dev/
 /deploy/secrets-e2e/
+/deploy/secrets-acceptance/
 /deploy/secrets/*
 !/deploy/secrets/README.md
 /deploy/metrics/

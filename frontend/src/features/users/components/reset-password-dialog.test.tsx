@@ -98,7 +98,8 @@ describe('ResetPasswordDialog', () => {
   })
 
   it('generates a password, runs behind reauthentication, and reveals it once', async () => {
-    const { screen, invalidate, onOpenChange } = await renderDialog()
+    const { screen, queryClient, invalidate, onOpenChange } =
+      await renderDialog()
 
     await expect
       .element(
@@ -132,6 +133,11 @@ describe('ResetPasswordDialog', () => {
         screen.getByLabelText(i18n.t('users:password.title'), { exact: true })
       )
       .toHaveValue('reset-temp-password')
+
+    // The one-time secret stays in the dialog only; it must never enter the
+    // React Query cache where a later read could recover it (spec §9.9).
+    const cached = JSON.stringify(queryClient.getQueryCache().getAll())
+    expect(cached).not.toContain('reset-temp-password')
 
     await userEvent.click(
       screen.getByRole('button', { name: i18n.t('users:password.saved') })

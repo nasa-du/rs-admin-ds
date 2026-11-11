@@ -128,6 +128,21 @@ function searchUpdater(): (prev: Record<string, unknown>) => unknown {
 }
 
 describe('Users page', () => {
+  it('renders no delete or bulk-selection affordances', async () => {
+    const screen = await renderPage(READER)
+
+    await expect
+      .element(screen.getByText('alice', { exact: true }))
+      .toBeInTheDocument()
+    expect(
+      screen.container.querySelectorAll('input[type="checkbox"]')
+    ).toHaveLength(0)
+    const buttons = Array.from(screen.container.querySelectorAll('button')).map(
+      (button) => button.textContent?.trim() ?? ''
+    )
+    expect(buttons.some((name) => /delete|bulk/i.test(name))).toBe(false)
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.search = {}

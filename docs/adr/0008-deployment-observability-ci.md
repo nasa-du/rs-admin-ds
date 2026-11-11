@@ -242,6 +242,16 @@
 
 ## Amendments
 
+- 2026-11-11：[性能/Argon2 基准 + 安全验证/故障注入 + 62 条验收收口](https://github.com/nasa-du/rs-admin-ds/issues/54) 落实 §6.6、§8.6、§10.8 与 §12.6–§12.9：
+  - 新增隔离的验收环境 `deploy/compose.acceptance.yaml`（edge/data/storage = 172.32.0.0/24、172.32.1.0/24、172.32.2.0/24）与 `scripts/lib/acceptance.sh`；性能、安全验证与故障注入共用 `rs-admin-accept` 项目，使用独立 secrets 目录并销毁自身卷，生产项目不受影响。
+  - 新增 `backend/crates/security/src/bin/argon2-bench.rs` 与 `scripts/bench-argon2.sh`：以 API 容器的 2-CPU 预算测得 p95 **143.80 ms**，以 4-vCPU 主机基线测得 **114.54 ms**，均在 100–300 ms 目标内，最终参数保持 `m=65536 KiB,t=3,p=4`（详见 ADR-0005 同日修订与 `docs/acceptance/argon2-*.md`）。
+  - 新增 `scripts/perf.sh` + `scripts/perf/load.ts`：20 并发登录、50 并发认证列表、20 并发同会话刷新，并从 `pg_stat_activity` 采样连接池。2-CPU 生产限制下 API p95 约 **81 ms**、刷新 p95 约 **50 ms**（每轮仅一个相同且不同于旧值的后继 Cookie、复用计数增量为 0）、连接池峰值 **3/10**，均达标；**登录 20 并发 p95 在多次运行中为 2249.89–2521.65 ms（0–10 次 503，2 秒哈希队列超时）**，4-CPU 实验为 1392–1423 ms，仍未达 1 s。该目标与「4 vCPU 主机 + 2 CPU 容器限制 + Argon2 64 MiB/t=3/p=4」在算术上冲突（20 次校验约需 4 CPU·秒），按 issue #54 记为**风险接受**：上线前在生产同规格主机重跑；若仍不达标，优先把主机提升到 ≥8 vCPU 并把 API 限制提高到 4–8 CPU，或按 §7 多实例 checklist 运行 4 × 2-CPU 副本；也可新增 ADR 修订登录 SLO/并发假设。不得为达标降低 Argon2 强度。完整分析见 `docs/acceptance/performance-analysis.md`。
+  - 新增 `scripts/security-verify.sh`：在真实网关上验证 API 安全头/ProblemDetails、精确 Origin CORS、CSRF、`__Host-refresh` 属性、账号锁定阈值，以及 API/网关/PostgreSQL 日志、审计表与 metrics 的凭据/哈希/用户名脱敏；并复用 `scripts/check-deploy-edge.sh`。本次 87 项实时检查全部通过。
+  - 新增 `scripts/security-scan.sh` 与 `.github/workflows/security.yml`：每周 `cargo audit`、`bun audit` 与 Trivy 三镜像扫描（含已核验的 `.trivyignore`）；CRITICAL 自动开/更新 `[security-scan]` issue。本次依赖扫描无 CRITICAL/HIGH；镜像扫描发现 2 个 CRITICAL（Alpine `brotli-libs`、PostgreSQL 镜像内 `gosu` 的 Go stdlib）；Debian `zlib1g` 的 CVE-2023-45853 经镜像内 `dpkg` 核验为 minizip 误报（该包不包含 minizip），已写入 `.trivyignore` 并保留证据。处置与开票命令记录在 `docs/acceptance/security-findings.md`，在修复/风险接受前是发布阻断项。
+  - 新增 `scripts/fault-injection.sh` 与 `e2e/tests/fault-injection.spec.ts`：数据库停止时认证返回 503 `service_unavailable` 且恢复后会话可用；撤销运行时角色对 `audit_logs` 的 INSERT 后登录返回 503 且会话行回滚、恢复授权后成功；停止 API 时网关 5xx 触发前端可重试的「无法恢复会话」页，恢复后 Retry 正常。三项全部通过。
+  - 文档收口：新增根 `README.md`、`CONTRIBUTING.md`、`.github/pull_request_template.md`、`docs/runbooks/acceptance.md`、`docs/acceptance/`（62 条矩阵、执行记录、性能/安全/故障注入/扫描报告与风险接受）；`docs/runbooks/README.md` 与 `alerting.md` 增加验收入口和容量复查触发器；`deploy/observability/prometheus/rules/rs-admin.yml` 新增 `CapacityCpuHigh`、`CapacityMemoryHigh`、`CapacityDatabaseLarge`、`CapacityLoginRateHigh`；`scripts/check-observability.sh` 校验这些规则。
+  - CI/脚本：backend 工作流增加 `scripts/check-acceptance-docs.sh` 与 `scripts/tests/acceptance.sh`；`scripts/e2e.sh` 与故障注入脚本按仓库固定的 Bun 1.4.2 解析，避免旧 Bun 无法读取 lockfile v2。OpenAPI 与 orval 生成物无漂移。
+  - 风险接受清单：登录 20 并发 SLO、3 个 CRITICAL 镜像发现、生产同规格硬件重跑（Argon2/性能）、生产 S3 恢复演练（AC-OPS-05）、GitHub 分支保护/发布 environment、外部 uptime 与真实 ACME 签发。每条均记录负责人、触发条件与缓解措施。
 - 2026-11-11：[E2E：9 条关键旅程（全栈 Compose）](https://github.com/nasa-du/rs-admin-ds/issues/53) 修订 §2.4：
   - `/auth/*` 的 `limit_req` 速率与 burst 改为环境可配置（`AUTH_RATE_LIMIT` / `AUTH_RATE_BURST`），生产默认仍为 `60r/m` + `burst=10 nodelay`，超限 429 + `Retry-After` 的行为不变。
   - 隔离的 E2E Compose 项目（`rs-admin-e2e`）把两者提高到 `600r/m` / `100`：自动化在数秒内发起的认证请求远快于人类。边缘限流本身仍由 `scripts/check-deploy-edge.sh` 用生产默认值验证。

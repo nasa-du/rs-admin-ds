@@ -22,6 +22,9 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+# shellcheck source=lib/bun.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/bun.sh"
+
 # Deliberately not overridable: the script destroys this project's volumes,
 # and a typo or an inherited variable pointing at the production project would
 # be unrecoverable. Parallel runs are not supported because the gateway binds
@@ -73,12 +76,20 @@ while (($# > 0)); do
     shift
 done
 
-for command in docker bun; do
+for command in docker; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "error: $command is required" >&2
         exit 1
     fi
 done
+
+# Bun 1.4.2 is pinned (e2e/bun.lock uses lockfile v2); lib/bun.sh resolves
+# BUN, a new enough system Bun, or the pinned development binary.
+bun_bin="$(resolve_bun || true)"
+if [[ -z "$bun_bin" ]] || ! command -v "$bun_bin" >/dev/null 2>&1; then
+    echo "error: bun is required (set BUN to the 1.4.2 binary)" >&2
+    exit 1
+fi
 
 compose() {
     docker compose \
@@ -103,9 +114,9 @@ fi
 # Prepare the runner before touching Docker: a toolchain failure must not
 # leave a stack running with well-known test credentials.
 echo "==> installing E2E dependencies and Chromium"
-(cd "$root/e2e" && bun install --frozen-lockfile)
-(cd "$root/e2e" && bunx playwright install chromium)
-(cd "$root/e2e" && bun run typecheck)
+(cd "$root/e2e" && "$bun_bin" install --frozen-lockfile)
+(cd "$root/e2e" && "$bun_bin" x playwright install chromium)
+(cd "$root/e2e" && "$bun_bin" run typecheck)
 
 echo "==> resetting Compose project $project (volumes included)"
 compose --profile local-db down --volumes --remove-orphans
@@ -156,7 +167,7 @@ echo "==> running the nine journeys against $admin_origin"
         E2E_BOOTSTRAP_USERNAME="$bootstrap_username" \
         E2E_BOOTSTRAP_PASSWORD="$bootstrap_password" \
         E2E_ADMIN_PASSWORD="$admin_password" \
-        bunx playwright test ${playwright_args[@]+"${playwright_args[@]}"}
+        "$bun_bin" x playwright test ${playwright_args[@]+"${playwright_args[@]}"}
 ) || status=$?
 
 if ((status != 0)); then

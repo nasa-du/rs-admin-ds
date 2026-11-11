@@ -1,0 +1,91 @@
+# Acceptance-only override for deploy/compose.yaml (spec §12.6–§12.8).
+#
+# The performance, security-verification and fault-injection harnesses must be
+# disposable and isolated. This overlay therefore uses its own network ranges
+# instead of the production 172.28-30.0.0/16 ranges, so it can run beside
+# another rs-admin stack. TLS, SCRAM and every application setting stay
+# identical to production, except the gateway auth ceiling: the harness makes
+# credential calls faster than a human, and the production limiter itself is
+# verified by scripts/check-deploy-edge.sh with the production defaults.
+#
+# The `perf` one-shot container carries the load generator into the edge
+# network so it can reach the API and metrics listeners directly, without
+# publishing either port. It is enabled only with --profile acceptance.
+#
+# Used only by scripts/perf.sh, scripts/security-verify.sh and
+# scripts/fault-injection.sh. Never deploy this file.
+
+services:
+  gateway:
+    environment:
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-600r/m}
+      AUTH_RATE_BURST: ${AUTH_RATE_BURST:-100}
+  api:
+    environment:
+      TRUSTED_PROXY_CIDRS: 172.32.0.0/24
+    # Production uses the 2-CPU limit from deploy/compose.yaml. Raise this only
+    # for an explicit capacity experiment; record the budget with the result.
+    deploy:
+      resources:
+        limits:
+          cpus: "${ACCEPTANCE_API_CPUS:-2}"
+  db:
+    volumes:
+      - ./db/pg_hba.acceptance.conf:/etc/rs-admin/pg_hba.conf:ro
+
+  perf:
+    image: oven/bun:1.4.2
+    profiles: ["acceptance"]
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      HOME: /tmp
+      BUN_INSTALL_CACHE_DIR: /tmp/bun-cache
+      PERF_BASE_URL: http://api:8080
+      PERF_METRICS_URL: http://api:9100/metrics
+      PERF_ORIGIN: ${ADMIN_ORIGIN:-https://admin.example.com}
+      PERF_ADMIN_USERNAME: ${PERF_ADMIN_USERNAME:-ops.perf}
+      PERF_ADMIN_TEMP_PASSWORD: ${PERF_ADMIN_TEMP_PASSWORD:-}
+      PERF_ADMIN_PASSWORD: ${PERF_ADMIN_PASSWORD:-}
+      PERF_USER_PASSWORD: ${PERF_USER_PASSWORD:-}
+      PERF_USERS: ${PERF_USERS:-50}
+      PERF_LOGIN_CONCURRENCY: ${PERF_LOGIN_CONCURRENCY:-20}
+      PERF_LOGIN_ROUNDS: ${PERF_LOGIN_ROUNDS:-4}
+      PERF_API_CONCURRENCY: ${PERF_API_CONCURRENCY:-50}
+      PERF_API_ROUNDS: ${PERF_API_ROUNDS:-10}
+      PERF_REFRESH_CONCURRENCY: ${PERF_REFRESH_CONCURRENCY:-20}
+      PERF_REFRESH_ROUNDS: ${PERF_REFRESH_ROUNDS:-3}
+    volumes:
+      - ../scripts/perf:/perf:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    entrypoint: ["bun", "run", "/perf/load.ts"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "1"
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.32.0.0/24
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.32.1.0/24
+  storage:
+    ipam:
+      config:
+        - subnet: 172.32.2.0/24

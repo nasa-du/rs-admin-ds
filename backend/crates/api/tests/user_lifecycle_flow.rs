@@ -3,7 +3,9 @@
 
 mod auth_support;
 
-use auth_support::{NewUser, PASSWORD, app, authorized_request, insert_user, login, problem_code};
+use auth_support::{
+    NewUser, PASSWORD, app, authorized_request, insert_user, login, problem_code, session_count,
+};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -1295,4 +1297,86 @@ async fn concurrent_demotions_cannot_remove_the_last_enabled_super_admin(pool: P
     .await
     .expect("enabled super admins");
     assert_eq!(enabled_super_admins, 1);
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn role_changes_apply_on_the_next_request_without_invalidating_sessions(pool: PgPool) {
+    let app = app(&pool).await;
+    insert_user(
+        &pool,
+        NewUser {
+            role: Some("super_admin"),
+            ..NewUser::active("root1", "root1@example.com")
+        },
+    )
+    .await;
+    let reader_role = insert_custom_role(&pool, "reader", &["users.read"]).await;
+    let alice_id = insert_user(&pool, NewUser::active("alice", "alice@example.com")).await;
+    let baseline = builtin_role_id(&pool, "user").await;
+
+    let alice_token = login_token(&app, "alice").await;
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &alice_token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (token_version_before,): (i64,) =
+        sqlx::query_as("SELECT token_version FROM users WHERE id = $1")
+            .bind(alice_id)
+            .fetch_one(&pool)
+            .await
+            .expect("token version");
+    let sessions_before = session_count(&pool, alice_id).await;
+
+    let root_token = login_token(&app, "root1").await;
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request(
+            "PUT",
+            &format!("/api/v1/users/{alice_id}/roles"),
+            &root_token,
+            Some(&json!({ "role_ids": [reader_role.to_string()] })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The same access token sees the new permission on its very next request.
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &alice_token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request(
+            "PUT",
+            &format!("/api/v1/users/{alice_id}/roles"),
+            &root_token,
+            Some(&json!({ "role_ids": [baseline.to_string()] })),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &alice_token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // RBAC changes are not session or token events (spec §6.2).
+    let (token_version_after,): (i64,) =
+        sqlx::query_as("SELECT token_version FROM users WHERE id = $1")
+            .bind(alice_id)
+            .fetch_one(&pool)
+            .await
+            .expect("token version");
+    assert_eq!(token_version_after, token_version_before);
+    assert_eq!(session_count(&pool, alice_id).await, sessions_before);
 }

@@ -800,3 +800,123 @@ fn weak_hash(password: &str) -> String {
         .expect("hash")
         .to_string()
 }
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn over_long_passwords_pay_the_dummy_verification_and_are_rejected(pool: PgPool) {
+    let app = app(&pool).await;
+    let user_id = insert_user(&pool, NewUser::active("alice", "alice@example.com")).await;
+    // 513 bytes / 513 code points: above both authentication input caps
+    // (512 bytes, 128 code points), so the handler must run the dummy
+    // verification and return the uniform credential failure (spec §8.1).
+    let over_long = "x".repeat(513);
+
+    let started = std::time::Instant::now();
+    let (status, _headers, body) = login(&app, "alice", &over_long).await;
+    let known_elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(problem_code(&body), "invalid_credentials");
+
+    let started = std::time::Instant::now();
+    let (status, _headers, body) = login(&app, "nobody@example.com", &over_long).await;
+    let unknown_elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(problem_code(&body), "invalid_credentials");
+
+    // A coarse lower bound: an early rejection without Argon2 would return in
+    // microseconds, while the dummy verification is tens of milliseconds even
+    // in an optimized build and far longer in the debug test profile.
+    for elapsed in [known_elapsed, unknown_elapsed] {
+        assert!(
+            elapsed >= std::time::Duration::from_millis(10),
+            "over-long inputs must perform a dummy Argon2 verification, took {elapsed:?}"
+        );
+    }
+
+    let failed_count: i32 =
+        sqlx::query_scalar("SELECT failed_login_count FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .expect("counter");
+    assert_eq!(failed_count, 1, "the known identifier counts one failure");
+
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_logs
+         WHERE action = 'authn_login_fail' AND details->>'reason_code' = 'bad_credentials'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("failure audits");
+    assert_eq!(audited, 2, "both rejected attempts are audited");
+}
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn authorization_checks_run_in_the_documented_order(pool: PgPool) {
+    let app = app(&pool).await;
+    let (token, bob_id) =
+        access_token(&pool, &app, &NewUser::active("bob", "bob@example.com")).await;
+
+    // JWT → user status → session → token_version → permission: the token is
+    // valid, the account is active, the session exists and the token version
+    // matches, so the first failure is the missing permission.
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem_code(&json(&body)), "forbidden");
+
+    // Bumping token_version invalidates the same token at the token_version
+    // stage, before permissions are evaluated.
+    sqlx::query("UPDATE users SET token_version = token_version + 1 WHERE id = $1")
+        .bind(bob_id)
+        .execute(&pool)
+        .await
+        .expect("bump token version");
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(problem_code(&json(&body)), "session_invalid");
+
+    // The user-status stage runs before the token_version stage: a disabled
+    // account reports account_disabled even though the token version is stale.
+    sqlx::query("UPDATE users SET status = 'disabled' WHERE id = $1")
+        .bind(bob_id)
+        .execute(&pool)
+        .await
+        .expect("disable bob");
+    let (status, _headers, body) = send(
+        app.clone(),
+        authorized_request("GET", "/api/v1/users", &token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem_code(&json(&body)), "account_disabled");
+
+    // A revoked session is rejected at the session stage for a fresh token.
+    let carol_id = insert_user(&pool, NewUser::active("carol", "carol@example.com")).await;
+    let (carol_status, _headers, carol_body) = login(&app, "carol", PASSWORD).await;
+    assert_eq!(carol_status, StatusCode::OK, "{carol_body}");
+    let carol_token = carol_body["access_token"]
+        .as_str()
+        .expect("carol token")
+        .to_owned();
+    sqlx::query(
+        "UPDATE auth_sessions SET revoked_at = now(), revoke_reason = 'logout' WHERE user_id = $1",
+    )
+    .bind(carol_id)
+    .execute(&pool)
+    .await
+    .expect("revoke session");
+    let (status, _headers, body) = send(
+        app,
+        authorized_request("GET", "/api/v1/users", &carol_token, None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(problem_code(&json(&body)), "session_invalid");
+}

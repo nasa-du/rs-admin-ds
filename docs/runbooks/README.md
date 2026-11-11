@@ -20,6 +20,11 @@ ticket; never paste credentials, tokens, cookies or key material.
 | Break-glass recovery | [break-glass.md](./break-glass.md) | `system_recover_super_admin` audit event |
 | Certificate renewal and external uptime | [certificate-renewal.md](./certificate-renewal.md) | `openssl s_client` output and probe metric |
 
+The M6 acceptance pass — Argon2 calibration, performance/capacity, live
+security verification and fault injection — has its own runbook:
+[acceptance.md](./acceptance.md). Run it on the production host before the
+first deployment and after any host or container CPU-limit change.
+
 The alert catalog in
 [deploy/observability/prometheus/rules/rs-admin.yml](../../deploy/observability/prometheus/rules/rs-admin.yml)
 carries a `runbook_url`. Most alerts land on the matching section of

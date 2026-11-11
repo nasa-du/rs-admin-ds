@@ -256,6 +256,38 @@ host and Prometheus are down.
    and update the provider only after the SPA returns 200.
 3. Provider checklist: [certificate-renewal.md](./certificate-renewal.md#externaluptime).
 
+## Capacity review
+
+The capacity assumptions and scaling triggers are in spec §10.10–§10.11 and
+ADR-0008 §1. `CapacityCpuHigh`, `CapacityMemoryHigh`,
+`CapacityDatabaseLarge` and `CapacityLoginRateHigh` cover the signals
+Prometheus can measure continuously. User and active-session counts are not
+exported as metrics; run these read-only queries during the review (they are
+also safe to run on a replica if one exists):
+
+```sql
+-- Total and enabled users (trigger: > 10,000 users).
+SELECT count(*) AS users, count(*) FILTER (WHERE status = 'active') AS enabled
+FROM users;
+
+-- Concurrent active sessions (trigger: > 50).
+SELECT count(*) AS active_sessions
+FROM auth_sessions
+WHERE revoked_at IS NULL
+  AND idle_expires_at > now()
+  AND absolute_expires_at > now();
+
+-- Database size (trigger: > 50 GB; the alert covers 50 GiB).
+SELECT pg_size_pretty(pg_database_size('rs_admin'));
+```
+
+Any trigger — users, sessions, login rate, database size, a sustained p95
+above target, or host CPU/memory above 70%/80% for 30 minutes — starts a
+capacity review. Re-check the 4 vCPU / 8 GiB host baseline, the per-replica
+connection formula (`replicas × 10 + reserved < max_connections`) and the
+Argon2 memory budget (`64 MiB × PASSWORD_HASH_CONCURRENCY`) before changing
+the topology. Record the review outcome in the release ticket.
+
 ## Stack operations
 
 Start the application stack first, then the observability stack:

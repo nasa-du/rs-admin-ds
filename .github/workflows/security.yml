@@ -1,0 +1,231 @@
+name: security
+
+# Weekly dependency and image scan (spec §10.8, §12.7, ADR-0008 §8.6).
+#
+# Advisory-database churn must not block pull requests, so this workflow runs
+# on a schedule (and on demand) instead of on every push. A CRITICAL finding
+# opens or updates one tracking issue; HIGH findings are recorded in the run
+# summary and artifacts for triage.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: security-scan
+  cancel-in-progress: false
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Scan Cargo.lock
+        run: |
+          set +e
+          cargo audit --json >"$RUNNER_TEMP/cargo-audit.json"
+          status=$?
+          set -e
+          # A missing JSON document is an infrastructure failure, not a finding.
+          jq -e '.vulnerabilities' "$RUNNER_TEMP/cargo-audit.json" >/dev/null
+          found="$(jq -r '.vulnerabilities.count // 0' "$RUNNER_TEMP/cargo-audit.json")"
+          critical="$(jq -r '[.vulnerabilities.list[]? | select(((.advisory.severity // "") | ascii_downcase) == "critical" or ((.advisory.cvss | if type == "object" then (.cvss3.base_score // 0) else 0 end) >= 9))] | length' "$RUNNER_TEMP/cargo-audit.json")"
+          high="$(jq -r '[.vulnerabilities.list[]? | select(((.advisory.severity // "") | ascii_downcase) == "high" or ((.advisory.cvss | if type == "object" then (.cvss3.base_score // 0) else 0 end) >= 7))] | length' "$RUNNER_TEMP/cargo-audit.json")"
+          {
+            echo "### cargo audit"
+            echo "- advisories: $found"
+            echo "- critical: $critical"
+            echo "- high: $high"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "cargo audit exit: $status" >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit
+          path: ${{ runner.temp }}/cargo-audit.json
+          if-no-files-found: error
+
+  bun-audit:
+    name: bun audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Scan bun.lock
+        working-directory: frontend
+        run: |
+          set +e
+          bun audit --json >"$RUNNER_TEMP/bun-audit.json"
+          status=$?
+          set -e
+          jq -e 'type == "object"' "$RUNNER_TEMP/bun-audit.json" >/dev/null
+          total="$(jq -r '[to_entries[].value[]?] | length' "$RUNNER_TEMP/bun-audit.json")"
+          critical="$(jq -r '[to_entries[].value[]? | select(((.severity // "") | ascii_downcase) == "critical")] | length' "$RUNNER_TEMP/bun-audit.json")"
+          high="$(jq -r '[to_entries[].value[]? | select(((.severity // "") | ascii_downcase) == "high")] | length' "$RUNNER_TEMP/bun-audit.json")"
+          {
+            echo "### bun audit"
+            echo "- advisories: $total"
+            echo "- critical: $critical"
+            echo "- high: $high"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "bun audit exit: $status" >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bun-audit
+          path: ${{ runner.temp }}/bun-audit.json
+          if-no-files-found: error
+
+  image-scan:
+    name: trivy ${{ matrix.name }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: .
+            file: ./backend/Dockerfile
+            tag: rs-admin-api:scan
+            build-args: |
+              GIT_COMMIT=${{ github.sha }}
+          - name: web
+            context: ./frontend
+            file: ./frontend/Dockerfile
+            tag: rs-admin-web:scan
+            build-args: |
+              VITE_API_BASE_URL=https://api.example.com
+          - name: db
+            context: ./deploy/db
+            file: ./deploy/db/Dockerfile
+            tag: rs-admin-db:scan
+            build-args: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: false
+          load: true
+          tags: ${{ matrix.tag }}
+          build-args: ${{ matrix.build-args }}
+          cache-from: type=gha,scope=security-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=security-${{ matrix.name }}
+
+      - name: Scan ${{ matrix.name }} image
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "$RUNNER_TEMP:/out" \
+            --volume "$PWD/.trivyignore:/tmp/.trivyignore:ro" \
+            aquasec/trivy:0.58.1 image --quiet --format json --timeout 20m \
+            --skip-java-db-update --db-repository ghcr.io/aquasecurity/trivy-db \
+            --ignorefile /tmp/.trivyignore \
+            --severity CRITICAL,HIGH --output "/out/trivy-${{ matrix.name }}.json" \
+            "${{ matrix.tag }}"
+          report="$RUNNER_TEMP/trivy-${{ matrix.name }}.json"
+          critical="$(jq -r '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+          high="$(jq -r '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' "$report")"
+          {
+            echo "### Trivy ${{ matrix.name }}"
+            echo "- critical: $critical"
+            echo "- high: $high"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ matrix.name }}
+          path: ${{ runner.temp }}/trivy-${{ matrix.name }}.json
+          if-no-files-found: error
+
+  report:
+    name: open a CRITICAL tracking issue
+    needs: [cargo-audit, bun-audit, image-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+
+      - name: Open or update the CRITICAL issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          critical=0
+          for report in "$RUNNER_TEMP"/artifacts/cargo-audit/*.json; do
+            [[ -f "$report" ]] || continue
+            count="$(jq -r '[.vulnerabilities.list[]? | select(((.advisory.severity // "") | ascii_downcase) == "critical" or ((.advisory.cvss | if type == "object" then (.cvss3.base_score // 0) else 0 end) >= 9))] | length' "$report")"
+            critical=$((critical + count))
+          done
+          for report in "$RUNNER_TEMP"/artifacts/bun-audit/*.json; do
+            [[ -f "$report" ]] || continue
+            count="$(jq -r '[to_entries[].value[]? | select(((.severity // "") | ascii_downcase) == "critical")] | length' "$report")"
+            critical=$((critical + count))
+          done
+          for report in "$RUNNER_TEMP"/artifacts/trivy-*/*.json; do
+            [[ -f "$report" ]] || continue
+            count="$(jq -r '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' "$report")"
+            critical=$((critical + count))
+          done
+          echo "critical findings: $critical" >>"$GITHUB_STEP_SUMMARY"
+          if ((critical == 0)); then
+            echo "No CRITICAL findings; no issue opened." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          body="$(printf '%s\n' \
+            "The scheduled security scan found **$critical CRITICAL finding(s)**." \
+            "" \
+            "- Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "- Artifacts: the \`cargo-audit\`, \`bun-audit\` and \`trivy-*\` artifacts on that run" \
+            "- Local reproduction: \`./scripts/security-scan.sh\`" \
+            "" \
+            "Fix or record a risk acceptance with the security owner before the next release.")"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search 'security-scan in:title' --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "[security-scan] CRITICAL findings in the weekly scan ($(date -u +%F))" \
+              --body "$body"
+          fi

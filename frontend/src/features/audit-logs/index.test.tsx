@@ -138,6 +138,18 @@ function searchFromCall(index = 0): Record<string, unknown> {
 }
 
 describe('Audit logs page', () => {
+  it('offers no export or edit affordances', async () => {
+    const screen = await renderPage()
+
+    await expect
+      .element(screen.getByText('authn_login_success'))
+      .toBeInTheDocument()
+    const buttons = Array.from(screen.container.querySelectorAll('button')).map(
+      (button) => button.textContent?.trim() ?? ''
+    )
+    expect(buttons.some((name) => /export|edit/i.test(name))).toBe(false)
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.search = { ...WINDOW }

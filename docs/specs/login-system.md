@@ -955,6 +955,7 @@ sequenceDiagram
 - 升级：登录验证成功后比较 PHC 参数与当前策略；低于当前策略则用当前策略 rehash 并更新该行；旧哈希在用户下次登录前继续有效；不做强制全员重置。
 - 未知标识：执行固定 dummy PHC 验证，参数与当前策略一致；dummy 哈希在启动时用当前参数生成。
 - 并发：`PASSWORD_HASH_CONCURRENCY = max(1, min(4, CPU 核数 / p))`；用 `tokio::sync::Semaphore` 限制并发；等待超过 2 秒返回 503 `service_unavailable`（带 `Retry-After`）；内存上限 `64 MiB × 并发数`。
+  - 2026-11-11 修订（issue #54）：部署通过 `PASSWORD_HASH_CONCURRENCY=4` 显式覆盖上述公式的默认值，以匹配 §10.10 的 20 并发登录目标与 §1.6 的 256 MiB 内存预算；公式仍是未显式配置时的默认。实测在 2-CPU 容器限制下 20 并发登录的 p95 仍超过 1 秒（`docs/acceptance/performance.md`），该 SLO 按 issue #54 记为风险接受，分析与缓解见 `docs/acceptance/performance-analysis.md`；不得为达标降低 Argon2 强度。
 - pepper：v1 不加服务端 pepper。
 - 输入上限：密码最多 128 个 Unicode 码点 / 512 字节；认证端点请求体上限 1 KiB。登录密码超过上限时仍执行 dummy 验证并返回 401 `invalid_credentials`；创建/改密超过上限返回 422 `password_policy_violation`。
 
@@ -2178,6 +2179,11 @@ E2E 不在生产环境执行；发布后 smoke 只做非破坏性检查（§10.9
 ## 14. 验收标准
 
 以下标准必须可测试。每条至少映射到 §12 的一个测试层或发布验收步骤。状态码与错误码以 §7 为准。
+
+> M6 的执行记录与逐条证据见 [`docs/acceptance/matrix.md`](../acceptance/matrix.md)
+> 与 [`docs/acceptance/2026-11-11.md`](../acceptance/2026-11-11.md)。
+> 性能、安全、故障注入与依赖/镜像扫描的可复现入口见
+> [`docs/acceptance/README.md`](../acceptance/README.md)。
 
 ### 14.1 认证与会话
 

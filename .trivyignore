@@ -1,0 +1,8 @@
+# Trivy findings accepted as not applicable, with evidence in
+# docs/acceptance/security-findings.md. Re-check whenever the base image changes.
+#
+# CVE-2023-45853: integer overflow in minizip's zipOpenNewFileInZip4_6.
+# Debian's zlib1g package ships only libz; minizip is a separate package
+# (libminizip1) and is not installed in rs-admin-api. Verified 2026-11-11 with
+# `dpkg -L zlib1g | grep -i mini` and `dpkg -l` inside the built image.
+CVE-2023-45853

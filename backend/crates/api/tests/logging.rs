@@ -113,3 +113,53 @@ fn absent_or_empty_filter_uses_the_default() {
     assert!(build_env_filter(None).is_ok());
     assert!(build_env_filter(Some("")).is_ok());
 }
+
+mod auth_support;
+
+#[sqlx::test(migrations = "../../migrations")]
+async fn application_logs_do_not_contain_identifiers_or_credentials(pool: sqlx::PgPool) {
+    // Unique sentinels: other tests run in parallel and may log their own
+    // user names, so the assertion must only depend on this test's traffic.
+    let username = "logprobe.af9";
+    let email = "logprobe.af9@example.com";
+    let password = "Log-Probe-Password-2026!";
+    let wrong_password = "Log-Probe-Wrong-2026!";
+
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(tracing_subscriber::EnvFilter::new("info"))
+        .with_writer(captured.clone())
+        .with_current_span(true)
+        .with_span_list(false)
+        .flatten_event(true)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+
+    let app = auth_support::app(&pool).await;
+    auth_support::insert_user(
+        &pool,
+        auth_support::NewUser {
+            password,
+            ..auth_support::NewUser::active(username, email)
+        },
+    )
+    .await;
+    let (status, _headers, body) = auth_support::login(&app, username, password).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    let (status, _headers, _body) = auth_support::login(&app, username, wrong_password).await;
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    drop(guard);
+
+    let logs = captured.contents();
+    assert!(
+        logs.contains("request completed"),
+        "no logs captured: {logs}"
+    );
+    for secret in [username, email, password, wrong_password] {
+        assert!(
+            !logs.contains(secret),
+            "application log leaked {secret}: {logs}"
+        );
+    }
+}

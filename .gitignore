@@ -5,6 +5,7 @@
 
 # Development key material and production secret mounts
 /deploy/secrets-dev/
+/deploy/secrets-e2e/
 /deploy/secrets/*
 !/deploy/secrets/README.md
 /deploy/metrics/
@@ -12,6 +13,11 @@
 
 # Local agent worktrees
 .claude/worktrees/
+
+# Full-stack E2E dependencies and artifacts
+/e2e/node_modules/
+/e2e/test-results/
+/e2e/playwright-report/
 
 # Editor / OS noise
 .DS_Store

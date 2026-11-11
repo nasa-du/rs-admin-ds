@@ -70,7 +70,9 @@ docker run --detach --rm --name "$gateway" --network "$network" \
     --volume "$secret_dir:/run/secrets:ro" \
     --env ADMIN_HOST=admin.example.com \
     --env API_HOST=api.example.com \
-    --env 'NGINX_ENVSUBST_FILTER=^(ADMIN_HOST|API_HOST)$' \
+    --env AUTH_RATE_LIMIT=60r/m \
+    --env AUTH_RATE_BURST=10 \
+    --env 'NGINX_ENVSUBST_FILTER=^(ADMIN_HOST|API_HOST|AUTH_RATE_LIMIT|AUTH_RATE_BURST)$' \
     nginxinc/nginx-unprivileged:1.29.8-alpine >/dev/null
 
 http_port="$(docker port "$gateway" 8080/tcp | head -n 1 | sed 's/.*://')"

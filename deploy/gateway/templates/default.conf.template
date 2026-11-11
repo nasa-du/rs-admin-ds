@@ -1,7 +1,8 @@
-# Rendered by the nginx image entrypoint. ${ADMIN_HOST} and ${API_HOST} are
-# injected by Compose; every other `$` is an nginx variable.
+# Rendered by the nginx image entrypoint. ${ADMIN_HOST}, ${API_HOST},
+# ${AUTH_RATE_LIMIT} and ${AUTH_RATE_BURST} are injected by Compose; every
+# other `$` is an nginx variable.
 
-limit_req_zone $binary_remote_addr zone=auth:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=auth:10m rate=${AUTH_RATE_LIMIT};
 
 # Resolve upstreams through Docker's embedded DNS per request so a restarted
 # container does not pin a stale address.
@@ -107,7 +108,7 @@ server {
     }
 
     location ^~ /api/v1/auth/ {
-        limit_req zone=auth burst=10 nodelay;
+        limit_req zone=auth burst=${AUTH_RATE_BURST} nodelay;
         client_max_body_size 1k;
         proxy_pass http://$api_backend;
         include /etc/nginx/snippets/proxy-headers.conf;

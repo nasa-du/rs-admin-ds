@@ -1,0 +1,32 @@
+# E2E-only override for deploy/compose.yaml (spec §12.5).
+#
+# The journey stack must be disposable and isolated. It therefore uses its own
+# network ranges instead of the production 172.28-30.0.0/16 ranges, so it can
+# run beside another rs-admin stack on the same Docker daemon. The API trusts
+# the E2E edge range and PostgreSQL accepts the E2E data range; TLS, SCRAM and
+# every application setting stay identical to production.
+#
+# Used only by scripts/e2e.sh. Never deploy this file.
+
+services:
+  api:
+    environment:
+      TRUSTED_PROXY_CIDRS: 172.31.0.0/24
+  db:
+    volumes:
+      - ./db/pg_hba.e2e.conf:/etc/rs-admin/pg_hba.conf:ro
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.1.0/24
+  storage:
+    ipam:
+      config:
+        - subnet: 172.31.2.0/24

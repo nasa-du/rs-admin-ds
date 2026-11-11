@@ -9,6 +9,9 @@ docs
 .env.*
 deploy/compose.yaml
 deploy/compose.dev.yaml
+deploy/compose.e2e.yaml
 deploy/gateway
 deploy/secrets
 deploy/secrets-dev
+deploy/secrets-e2e
+e2e

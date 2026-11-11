@@ -398,8 +398,15 @@ expect_file "gateway loads the certificate from a mounted secret" "$tls_snippet"
 expect_file "gateway shares one TLS snippet" "$gateway" 'include /etc/nginx/snippets/tls\.conf;'
 expect_file "gateway redirects HTTP to HTTPS with 301" "$gateway" 'return 301 https://'
 expect_file "gateway emits HSTS" "$gateway" 'Strict-Transport-Security.*max-age=31536000.*includeSubDomains'
-expect_file "gateway applies the auth rate limit" "$gateway" 'limit_req_zone \$binary_remote_addr zone=auth:10m rate=60r/m;'
-expect_file "gateway uses a burst of 10 without queuing" "$gateway" 'limit_req zone=auth burst=10 nodelay;'
+expect_file "gateway applies the auth rate limit" "$gateway" 'limit_req_zone \$binary_remote_addr zone=auth:10m rate=\$\{AUTH_RATE_LIMIT\};'
+expect_file "gateway uses a burst without queuing" "$gateway" 'limit_req zone=auth burst=\$\{AUTH_RATE_BURST\} nodelay;'
+expect_file "compose defaults the auth rate" "deploy/compose.yaml" 'AUTH_RATE_LIMIT: \$\{AUTH_RATE_LIMIT:-60r/m\}'
+expect_file "compose defaults the auth burst" "deploy/compose.yaml" 'AUTH_RATE_BURST: \$\{AUTH_RATE_BURST:-10\}'
+expect_file "environment example records the auth rate" "deploy/.env.example" '^AUTH_RATE_LIMIT=60r/m$'
+expect_file "environment example records the auth burst" "deploy/.env.example" '^AUTH_RATE_BURST=10$'
+expect_compose \
+    "gateway envsubst allowlists the auth limit variables" \
+    '.services.gateway.environment.NGINX_ENVSUBST_FILTER == "^(ADMIN_HOST|API_HOST|AUTH_RATE_LIMIT|AUTH_RATE_BURST)$$"'
 expect_file "gateway returns 429 on rate limit" "$gateway" 'limit_req_status 429;'
 expect_file "gateway returns Retry-After on 429" "$gateway" 'Retry-After'
 proxy_snippet="deploy/gateway/snippets/proxy-headers.conf"

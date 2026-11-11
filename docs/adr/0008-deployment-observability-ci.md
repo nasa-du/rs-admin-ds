@@ -242,6 +242,9 @@
 
 ## Amendments
 
+- 2026-11-11：[E2E：9 条关键旅程（全栈 Compose）](https://github.com/nasa-du/rs-admin-ds/issues/53) 修订 §2.4：
+  - `/auth/*` 的 `limit_req` 速率与 burst 改为环境可配置（`AUTH_RATE_LIMIT` / `AUTH_RATE_BURST`），生产默认仍为 `60r/m` + `burst=10 nodelay`，超限 429 + `Retry-After` 的行为不变。
+  - 隔离的 E2E Compose 项目（`rs-admin-e2e`）把两者提高到 `600r/m` / `100`：自动化在数秒内发起的认证请求远快于人类。边缘限流本身仍由 `scripts/check-deploy-edge.sh` 用生产默认值验证。
 - 2026-11-11：[PG18 升级演练 + 运维 runbook 全集](https://github.com/nasa-du/rs-admin-ds/issues/52) 落实 §7.4 与 §11.4：
   - 新增升级维护镜像 `deploy/db/upgrade/Dockerfile`：把生产 `DB_IMAGE` 的 PG18 `/usr/local` 树复制到 `/opt/pg18` 作为 `--old-bindir`，目标版本为 `postgres:19rc1-alpine`（PG19 GA 后改成最新 `postgres:19.x-alpine`）。旧树的 `pg_config` 用包装脚本返回 `/opt/pg18` 前缀，避免 `pg_upgrade` 误查新版本的库目录。
   - 新增 `scripts/upgrade-drill.sh`：从最近 pgBackRest 备份恢复到临时 PG18 实例并先跑一次审计链/迁移/关键行验证；确认干净关闭；用目标版本 `initdb` 初始化空集群（沿用源的 encoding/locale、`--username` 与应用超管一致，`pg_upgrade` 本身不运行 `initdb`）；执行 `pg_upgrade --check --copy`；重新初始化并执行真正的 `pg_upgrade --copy`；启动 PG19、运行 `ANALYZE` 与 `pg_upgrade` 生成的 `update_extensions.sql`，再验迁移版本、关键行数、扩展与审计链。默认且只支持 `--copy`，不支持 `--link`；各阶段耗时与两次验证结果写入 `UPGRADE_DRILL_STATE_DIR`。2026-11-11 在开发主机用 30.9 MB、1,334 文件的备份实测：restore 6s、initdb 3s、check 1s、copy 4s、总计 18s；该表只作为方法学基线，生产窗口必须以生产数据重跑。

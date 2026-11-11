@@ -43,6 +43,17 @@ and a web image build.
 Both workflows run after any change to their contract artifacts, so OpenAPI or
 generated-client drift fails the pull request.
 
+### Full-stack E2E (pre-release)
+
+The manual **Actions → e2e → Run workflow** job runs the nine journeys from
+spec §12.5 on an ephemeral runner: `scripts/e2e.sh` builds the production
+Compose stack, bootstraps a fresh super administrator, drives Chromium through
+the gateway (real HTTPS edge, CORS, CSRF and `__Host-refresh` cookie) and
+removes the stack. It is deliberately not a pull-request gate and never
+contacts the deployment host. Run it before tagging a release, and attach the
+workflow run (or the local Playwright report) to the release ticket. See
+[e2e/README.md](../../e2e/README.md) for local options and the journey list.
+
 ## 2. Images and tags
 
 `.github/workflows/publish-images.yml` publishes:

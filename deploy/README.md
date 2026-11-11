@@ -372,7 +372,9 @@ Static observability checks run in CI:
 - HSTS is `max-age=31536000; includeSubDomains` (preload is added only after the
   real domain is confirmed).
 - `/api/v1/auth/*` is limited to 60 requests/minute per client IP with a
-  `burst=10`; over-limit responses are `429` with `Retry-After`.
+  `burst=10`; over-limit responses are `429` with `Retry-After`. The rate and
+  burst are environment-tunable (`AUTH_RATE_LIMIT`, `AUTH_RATE_BURST`) for
+  the isolated E2E stack; production keeps the defaults.
 - `/health/*`, `/metrics`, `/api-docs`, Swagger UI and `/openapi.json` return
   `404` on both public hosts. Use the internal network for monitoring.
 - Proxy connect/read/send timeouts are 30 seconds; auth bodies are capped at
@@ -389,6 +391,7 @@ Static observability checks run in CI:
 
 | Setting | Value |
 |---|---|
+| Gateway auth limit | 60 req/min per IP, burst 10 (`AUTH_RATE_LIMIT` / `AUTH_RATE_BURST`) |
 | API request timeout | 30 s |
 | Graceful shutdown | 15 s app, 25 s Compose grace |
 | DB pool per API replica | 10 (min 1, acquire 3 s, idle 10 min, lifetime 30 min) |
@@ -411,7 +414,14 @@ Static acceptance checks and integration checks (also run in CI):
 ./scripts/check-observability.sh   # compose, rules, dashboards, retention, redaction
 ./scripts/tests/release.sh         # release/dry-run/rollback state machine
 ./scripts/tests/upgrade-drill.sh   # upgrade drill state machine (stubbed docker)
+./scripts/e2e.sh                   # nine full-stack journeys on an isolated stack
 ```
+
+`scripts/e2e.sh` boots a disposable `rs-admin-e2e` Compose project
+(gateway/web/api/db), bootstraps a super administrator and runs the spec §12.5
+journeys in Chromium. It resets that project's volumes; never point it at
+production. See [e2e/README.md](../e2e/README.md) for prerequisites and
+options.
 
 They assert the service topology, published ports, non-root/read-only/no-new-
 privileges hardening, healthcheck, secret wiring, gateway TLS/rate-limit/deny

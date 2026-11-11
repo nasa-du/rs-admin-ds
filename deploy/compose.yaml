@@ -37,8 +37,15 @@ services:
     environment:
       ADMIN_HOST: ${ADMIN_HOST:-admin.example.com}
       API_HOST: ${API_HOST:-api.example.com}
-      # Restrict envsubst to the two host names; nginx variables stay intact.
-      NGINX_ENVSUBST_FILTER: '^(ADMIN_HOST|API_HOST)$'
+      # Auth rate limit (spec §10.2, ADR-0008 §2.4); production keeps 60r/m
+      # with burst 10. The isolated E2E stack raises them because automation
+      # makes auth calls faster than a human; the limiter itself is covered by
+      # check-deploy-edge.sh with the production defaults.
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-60r/m}
+      AUTH_RATE_BURST: ${AUTH_RATE_BURST:-10}
+      # Restrict envsubst to the names this template consumes; nginx variables
+      # stay intact.
+      NGINX_ENVSUBST_FILTER: '^(ADMIN_HOST|API_HOST|AUTH_RATE_LIMIT|AUTH_RATE_BURST)$'
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./gateway/templates:/etc/nginx/templates:ro

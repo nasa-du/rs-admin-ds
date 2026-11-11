@@ -1,0 +1,51 @@
+name: e2e
+
+# Full-stack journeys (spec §12.5). Manual only: it builds and runs the whole
+# Compose stack, so it is a pre-release check rather than a pull-request gate.
+# It never touches production; the runner's ephemeral Docker daemon hosts the
+# stack and the project is destroyed afterwards.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  journeys:
+    name: nine full-stack journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install E2E dependencies and Chromium
+        working-directory: e2e
+        run: |
+          bun install --frozen-lockfile
+          bunx playwright install --with-deps chromium
+
+      - name: Run the journeys
+        run: ./scripts/e2e.sh
+
+      - name: Upload the Playwright report
+        # Keep diagnostics for a failed, timed-out or cancelled run. `always()`
+        # makes the step eligible after cancellation; `failure() || cancelled()`
+        # avoids uploading the passing run's videos and report.
+        if: ${{ always() && (failure() || cancelled()) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# Relocated pg_config for the PostgreSQL 18 tree copied to /opt/pg18.
+#
+# The upstream binaries are compiled with --prefix=/usr/local. pg_upgrade asks
+# pg_config for the old pkglibdir/sharedir and would otherwise inspect the
+# target version's files. Report the relocated paths and pass every other
+# option to the real PostgreSQL 18 pg_config.
+
+set -eu
+
+for option in "$@"; do
+    case "$option" in
+        --bindir) printf '%s\n' /opt/pg18/bin ;;
+        --libdir) printf '%s\n' /opt/pg18/lib ;;
+        --pkglibdir) printf '%s\n' /opt/pg18/lib/postgresql ;;
+        --sharedir) printf '%s\n' /opt/pg18/share/postgresql ;;
+        --includedir) printf '%s\n' /opt/pg18/include ;;
+        --includedir-server) printf '%s\n' /opt/pg18/include/postgresql/server ;;
+        --mandir) printf '%s\n' /opt/pg18/share/man ;;
+        --docdir) printf '%s\n' /opt/pg18/share/doc/postgresql ;;
+        --localedir) printf '%s\n' /opt/pg18/share/locale ;;
+        --sysconfdir) printf '%s\n' /opt/pg18/etc ;;
+        --pgxs) printf '%s\n' /opt/pg18/lib/postgresql/pgxs/src/makefiles/pgxs.mk ;;
+        *) /opt/pg18/bin/pg_config.real "$option" ;;
+    esac
+done

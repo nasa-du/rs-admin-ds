@@ -24,6 +24,9 @@ RUN cargo build --locked --release \
     --bin alert-webhook \
     --bin migrate \
     --package rs-admin-cli \
+    --bin bootstrap-super-admin \
+    --bin recover-super-admin \
+    --bin record-key-rotation \
     --bin maintenance \
     --bin verify-audit-chain
 
@@ -45,6 +48,9 @@ RUN groupadd --system --gid 10001 rs-admin \
 COPY --from=builder /build/target/release/rs-admin-api /usr/local/bin/rs-admin-api
 COPY --from=builder /build/target/release/alert-webhook /usr/local/bin/rs-admin-alert-webhook
 COPY --from=builder /build/target/release/migrate /usr/local/bin/rs-admin-migrate
+COPY --from=builder /build/target/release/bootstrap-super-admin /usr/local/bin/rs-admin-bootstrap-super-admin
+COPY --from=builder /build/target/release/recover-super-admin /usr/local/bin/rs-admin-recover-super-admin
+COPY --from=builder /build/target/release/record-key-rotation /usr/local/bin/rs-admin-record-key-rotation
 COPY --from=builder /build/target/release/maintenance /usr/local/bin/rs-admin-maintenance
 COPY --from=builder /build/target/release/verify-audit-chain /usr/local/bin/rs-admin-verify-audit-chain
 COPY deploy/db/grants.sql /opt/rs-admin/grants.sql
@@ -54,6 +60,9 @@ RUN chmod 0755 \
     /usr/local/bin/rs-admin-api \
     /usr/local/bin/rs-admin-alert-webhook \
     /usr/local/bin/rs-admin-migrate \
+    /usr/local/bin/rs-admin-bootstrap-super-admin \
+    /usr/local/bin/rs-admin-recover-super-admin \
+    /usr/local/bin/rs-admin-record-key-rotation \
     /usr/local/bin/rs-admin-maintenance \
     /usr/local/bin/rs-admin-verify-audit-chain \
     /usr/local/bin/rs-admin-migrate-and-grant

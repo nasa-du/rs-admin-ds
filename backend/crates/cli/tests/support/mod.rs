@@ -29,17 +29,20 @@ pub fn password_service() -> &'static PasswordService {
     })
 }
 
+pub fn audit_keyring() -> AuditKeyRing {
+    AuditKeyRing::from_json(
+        &format!("{{\"{AUDIT_KEY_ID}\":\"{AUDIT_KEY_B64}\"}}"),
+        AUDIT_KEY_ID,
+    )
+    .expect("audit keyring")
+}
+
 pub fn services() -> &'static CliServices {
     static SERVICES: OnceLock<CliServices> = OnceLock::new();
     SERVICES.get_or_init(|| {
-        let keys = AuditKeyRing::from_json(
-            &format!("{{\"{AUDIT_KEY_ID}\":\"{AUDIT_KEY_B64}\"}}"),
-            AUDIT_KEY_ID,
-        )
-        .expect("audit keyring");
         CliServices::from_parts(
             password_service().clone(),
-            keys,
+            audit_keyring(),
             Duration::from_secs(72 * 3600),
         )
     })

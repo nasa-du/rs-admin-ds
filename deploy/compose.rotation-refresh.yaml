@@ -1,0 +1,21 @@
+# Refresh-derivation rotation-window override for the API service.
+#
+# Compose mounts file-based secrets, so the optional previous derivation key
+# can only be added while a refresh-key rotation is in progress. Use this file
+# together with the production stack, then remove it after the overlap window:
+#
+#   docker compose -f compose.yaml -f compose.rotation-refresh.yaml up -d --no-deps api
+#   docker compose -f compose.yaml up -d --no-deps api
+#
+# See docs/runbooks/secret-rotation.md.
+
+services:
+  api:
+    environment:
+      REFRESH_DERIVATION_KEY_PREVIOUS_FILE: /run/secrets/refresh_derivation_previous
+    secrets:
+      - refresh_derivation_previous
+
+secrets:
+  refresh_derivation_previous:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/refresh-derivation-previous.key

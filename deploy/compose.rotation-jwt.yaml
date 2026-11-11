@@ -1,0 +1,23 @@
+# JWT rotation-window override for the API service.
+#
+# Compose mounts file-based secrets, so the optional previous public key and
+# key id can only be added while a JWT rotation is in progress. Use this file
+# together with the production stack, then remove it after the overlap window:
+#
+#   docker compose -f compose.yaml -f compose.rotation-jwt.yaml up -d --no-deps api
+#   docker compose -f compose.yaml up -d --no-deps api
+#
+# JWT_EDDSA_PREVIOUS_KID is read from the Compose env file; set it in
+# deploy/.env while this override is active. See docs/runbooks/secret-rotation.md.
+
+services:
+  api:
+    environment:
+      JWT_EDDSA_PREVIOUS_PUBLIC_KEY_FILE: /run/secrets/jwt_ed25519_previous_public
+      JWT_EDDSA_PREVIOUS_KID: ${JWT_EDDSA_PREVIOUS_KID:?set JWT_EDDSA_PREVIOUS_KID in deploy/.env}
+    secrets:
+      - jwt_ed25519_previous_public
+
+secrets:
+  jwt_ed25519_previous_public:
+    file: ${RS_ADMIN_SECRETS_DIR:-./secrets}/jwt-ed25519-previous-public.pem

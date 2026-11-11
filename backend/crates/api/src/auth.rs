@@ -133,11 +133,13 @@ impl AuthServices {
         settings: AuthSettings,
         trusted_proxies: TrustedProxies,
     ) -> Result<Self, AuthServiceError> {
-        let jwt = JwtIssuer::new(
+        let jwt = JwtIssuer::with_previous(
             &security.jwt.issuer,
             &security.jwt.audience,
             &security.jwt.kid,
             &security.jwt.signing_key,
+            security.jwt.previous_kid.as_deref(),
+            security.jwt.previous_verification_key.as_ref(),
         )?;
 
         Ok(Self {

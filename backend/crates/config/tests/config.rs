@@ -276,12 +276,17 @@ fn invalid_jwt_pem_never_echoes_key_material() {
 #[test]
 fn previous_rotation_keys_are_optional_and_validated() {
     let mut map = base();
+    map.insert("JWT_EDDSA_PREVIOUS_KID".into(), "jwt-2026-05".into());
     map.insert("JWT_EDDSA_PREVIOUS_PUBLIC_KEY".into(), public_pem());
     map.insert(
         "REFRESH_DERIVATION_KEY_PREVIOUS".into(),
         OTHER_KEY_B64.into(),
     );
     let config = load(&map).expect("valid rotation keys");
+    assert_eq!(
+        config.security.jwt.previous_kid.as_deref(),
+        Some("jwt-2026-05")
+    );
     assert!(config.security.jwt.previous_verification_key.is_some());
     assert_eq!(
         config
@@ -296,6 +301,18 @@ fn previous_rotation_keys_are_optional_and_validated() {
     let mut bad_public = map.clone();
     bad_public.insert("JWT_EDDSA_PREVIOUS_PUBLIC_KEY".into(), private_pem());
     assert!(load(&bad_public).is_err());
+
+    let mut missing_kid = map.clone();
+    missing_kid.remove("JWT_EDDSA_PREVIOUS_KID");
+    assert!(load(&missing_kid).is_err());
+
+    let mut missing_key = map.clone();
+    missing_key.remove("JWT_EDDSA_PREVIOUS_PUBLIC_KEY");
+    assert!(load(&missing_key).is_err());
+
+    let mut equal_kid = map.clone();
+    equal_kid.insert("JWT_EDDSA_PREVIOUS_KID".into(), "jwt-2026-11".into());
+    assert!(load(&equal_kid).is_err());
 
     let mut bad_previous = map;
     bad_previous.insert("REFRESH_DERIVATION_KEY_PREVIOUS".into(), "nope".into());
@@ -328,6 +345,7 @@ fn secret_files_take_precedence_for_every_loaded_secret() {
     }
 
     let mut map = base();
+    map.insert("JWT_EDDSA_PREVIOUS_KID".into(), "jwt-2026-05".into());
     for (env_key, file) in &files {
         map.remove(env_key.trim_end_matches("_FILE"));
         map.insert(
@@ -374,6 +392,7 @@ fn config_debug_output_redacts_all_key_material() {
         "REFRESH_DERIVATION_KEY_PREVIOUS".into(),
         OTHER_KEY_B64.into(),
     );
+    map.insert("JWT_EDDSA_PREVIOUS_KID".into(), "jwt-2026-05".into());
     map.insert("JWT_EDDSA_PREVIOUS_PUBLIC_KEY".into(), public_pem());
     let config = load(&map).expect("valid config");
 

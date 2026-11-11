@@ -70,10 +70,16 @@ File contents:
 
 Optional rotation files (not mounted by the default Compose file):
 
-- `jwt_ed25519_previous_public.pem` — verifies tokens signed before a JWT
-  rotation (`JWT_EDDSA_PREVIOUS_PUBLIC_KEY_FILE`).
-- `refresh_derivation_previous.key` — keeps refresh derivation valid during
-  the rotation window (`REFRESH_DERIVATION_KEY_PREVIOUS_FILE`).
+- `jwt-ed25519-previous-public.pem` — verifies tokens signed by the
+  predecessor key during a publish-before-use rotation. Mount it with
+  [`deploy/compose.rotation-jwt.yaml`](../compose.rotation-jwt.yaml); the
+  override also reads `JWT_EDDSA_PREVIOUS_KID` from `deploy/.env`.
+- `refresh-derivation-previous.key` — keeps refresh derivation valid during
+  the rotation window (`REFRESH_DERIVATION_KEY_PREVIOUS_FILE`). Mount it with
+  [`deploy/compose.rotation-refresh.yaml`](../compose.rotation-refresh.yaml).
+
+The exact publish order, overlap and verification for every key class are in
+[docs/runbooks/secret-rotation.md](../../docs/runbooks/secret-rotation.md).
 
 Audit chain keys must remain in `audit-chain-keys.json` for at least 365 days
 so historical rows can still be verified. See spec §8.7 for the rotation

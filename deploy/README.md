@@ -1,6 +1,9 @@
 # Single-host deployment
 
-Docker Compose stack for one Linux host:
+Docker Compose stack for one Linux host. The complete operator procedures live
+in [docs/runbooks/README.md](../docs/runbooks/README.md): first deployment,
+release and rollback, secret rotation, backup and restore, PostgreSQL upgrade,
+alert troubleshooting, break-glass recovery, and certificate renewal.
 
 ```
 gateway (nginx, TLS, host routing, rate limit)   host :80/:443
@@ -24,8 +27,9 @@ can archive WAL to the S3-compatible repository; only `db` and the one-shot
 - Docker Engine 27+ with Compose v2.
 - An SPA/API host pair in the same registrable domain (defaults:
   `admin.example.com` and `api.example.com`).
-- TLS certificate and key for both hosts. The gateway terminates TLS; certificate
-  issuance/renewal is outside this ticket.
+- TLS certificate and key for both hosts. The gateway terminates TLS; issuance
+  and renewal use certbot as documented in
+  [certificate-renewal.md](../docs/runbooks/certificate-renewal.md).
 - Key material in a secrets directory (see
   [secrets/README.md](./secrets/README.md)).
 
@@ -144,6 +148,11 @@ Before the first release:
    starts the database and long-running services with `up -d --no-deps`, and
    confirms readiness. A non-zero migration exit aborts before the new
    containers start; the one-shot migration is not executed a second time.
+
+The complete first-install sequence, including host preparation, secret
+generation and the bootstrap super administrator, is
+[first-deploy.md](../docs/runbooks/first-deploy.md). Emergency super-admin
+recovery is [break-glass.md](../docs/runbooks/break-glass.md).
 
 ### External database
 
@@ -282,9 +291,28 @@ HMAC chain, records the measured RTO under `$RESTORE_DRILL_STATE_DIR`, and
 removes the container and volume. A failed drill exits non-zero, keeps the
 record and notifies through `rs-admin-alert@.service`.
 
+Before a PostgreSQL major-version window, run the upgrade drill:
+
+```sh
+./scripts/upgrade-drill.sh --operator ops
+./scripts/upgrade-drill.sh --expected-migration-version 20261108000000
+```
+
+It restores the newest backup, runs the pre-upgrade audit-chain verification,
+`pg_upgrade --check --copy`, the real `--copy` upgrade, `ANALYZE`, and the
+post-upgrade migration/key-data/extension/audit-chain verification. The
+measured phases and both verifier outputs are written under
+`$UPGRADE_DRILL_STATE_DIR`; see
+[postgres-upgrade.md](../docs/runbooks/postgres-upgrade.md). The maintenance
+image is built from [db/upgrade/Dockerfile](./db/upgrade/Dockerfile) with the
+production `DB_IMAGE` as the old-binary source and
+`PG_UPGRADE_NEW_IMAGE` (default `postgres:19rc1-alpine`) as the target.
+
 With an external database, remove the `local-db` profile: the external
 operator owns backup, WAL archiving, restore drills and the `database_url_cleanup`
-DSN. The maintenance timer can still run with `--profile tools`.
+DSN. The maintenance timer can still run with `--profile tools`. The upgrade
+drill applies only to self-managed local databases; the external operator owns
+the major-version upgrade and its verification.
 
 ## Observability stack
 
@@ -377,10 +405,12 @@ ample room for migration, maintenance, backup and exporter connections under
 Static acceptance checks and integration checks (also run in CI):
 
 ```sh
-./scripts/check-deploy.sh          # topology, hardening, secrets, gateway, SPA
+./scripts/check-deploy.sh          # topology, hardening, secrets, gateway, SPA, runbooks
 ./scripts/check-deploy-db.sh       # TLS-only SCRAM, roles, migrations, grants
 ./scripts/check-deploy-edge.sh     # real nginx TLS/host routing/rate limit
 ./scripts/check-observability.sh   # compose, rules, dashboards, retention, redaction
+./scripts/tests/release.sh         # release/dry-run/rollback state machine
+./scripts/tests/upgrade-drill.sh   # upgrade drill state machine (stubbed docker)
 ```
 
 They assert the service topology, published ports, non-root/read-only/no-new-

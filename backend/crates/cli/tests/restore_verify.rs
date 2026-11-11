@@ -4,23 +4,10 @@ mod support;
 
 use rs_admin_audit::{AuditAction, AuditActor, AuditEvent, AuditResult, AuditWriter};
 use rs_admin_cli::{RestoreVerifyError, verify_restored_database};
-use rs_admin_security::AuditKeyRing;
 use rs_admin_store::expected_migration_version;
 use sqlx::PgPool;
-use support::{NewUser, insert_user, prepare_catalog, services};
+use support::{NewUser, audit_keyring, insert_user, prepare_catalog, services};
 use uuid::Uuid;
-
-fn keyring() -> AuditKeyRing {
-    AuditKeyRing::from_json(
-        &format!(
-            "{{\"{}\":\"{}\"}}",
-            support::AUDIT_KEY_ID,
-            support::AUDIT_KEY_B64
-        ),
-        support::AUDIT_KEY_ID,
-    )
-    .expect("keyring")
-}
 
 fn audit_event() -> AuditEvent {
     AuditEvent::builder(
@@ -46,12 +33,12 @@ async fn verifies_the_schema_counts_and_audit_chain(pool: PgPool) {
     )
     .await;
 
-    let writer = AuditWriter::new(keyring());
+    let writer = AuditWriter::new(audit_keyring());
     writer.write(&pool, &audit_event()).await.expect("audit");
     writer.write(&pool, &audit_event()).await.expect("audit");
 
     let verification =
-        verify_restored_database(&pool, &keyring(), Some(expected_migration_version()))
+        verify_restored_database(&pool, &audit_keyring(), Some(expected_migration_version()))
             .await
             .expect("restored database verifies");
 
@@ -67,7 +54,7 @@ async fn verifies_the_schema_counts_and_audit_chain(pool: PgPool) {
 
 #[sqlx::test(migrations = "../../migrations")]
 async fn rejects_a_database_without_key_rows(pool: PgPool) {
-    let error = verify_restored_database(&pool, &keyring(), None)
+    let error = verify_restored_database(&pool, &audit_keyring(), None)
         .await
         .expect_err("a database without users or built-in roles is not usable");
     assert!(matches!(
@@ -79,7 +66,7 @@ async fn rejects_a_database_without_key_rows(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn rejects_an_unexpected_migration_version(pool: PgPool) {
     let expected = expected_migration_version() + 1;
-    let error = verify_restored_database(&pool, &keyring(), Some(expected))
+    let error = verify_restored_database(&pool, &audit_keyring(), Some(expected))
         .await
         .expect_err("the version differs");
 
@@ -97,7 +84,7 @@ async fn rejects_a_failed_migration(pool: PgPool) {
         .await
         .expect("mark failed");
 
-    let error = verify_restored_database(&pool, &keyring(), None)
+    let error = verify_restored_database(&pool, &audit_keyring(), None)
         .await
         .expect_err("a failed migration is invalid");
     assert!(matches!(error, RestoreVerifyError::FailedMigration));
@@ -110,7 +97,7 @@ async fn rejects_missing_migration_history(pool: PgPool) {
         .await
         .expect("clear history");
 
-    let error = verify_restored_database(&pool, &keyring(), None)
+    let error = verify_restored_database(&pool, &audit_keyring(), None)
         .await
         .expect_err("the migration table is empty");
     assert!(matches!(error, RestoreVerifyError::NoMigrations));
@@ -137,7 +124,7 @@ async fn rejects_a_broken_audit_chain(pool: PgPool) {
         .await
         .expect("tamper");
 
-    let error = verify_restored_database(&pool, &keyring(), None)
+    let error = verify_restored_database(&pool, &audit_keyring(), None)
         .await
         .expect_err("a tampered chain is invalid");
     assert!(matches!(error, RestoreVerifyError::Audit(_)));

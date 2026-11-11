@@ -5,6 +5,8 @@
 //! an argument value, because that value could be a password typed by
 //! mistake.
 
+use crate::key_rotation::{KeyType, RotationReason};
+
 /// Outcome of parsing a command line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseOutcome<T> {
@@ -29,6 +31,8 @@ pub enum ArgError {
     PasswordFlagForbidden,
     #[error("unexpected positional argument")]
     UnexpectedPositional,
+    #[error("option {0} has an invalid value")]
+    InvalidValue(&'static str),
 }
 
 pub const BOOTSTRAP_USAGE: &str = "\
@@ -55,6 +59,17 @@ twice from an interactive prompt without echo, or from the first line of stdin
 with --password-stdin. Confirmation is always read from a terminal: type the
 target email when prompted.";
 
+pub const RECORD_KEY_ROTATION_USAGE: &str = "\
+record-key-rotation - append the critical crypto_key_rotated audit event
+
+Usage:
+  record-key-rotation --key-type <jwt|refresh_derivation|throttle|audit_chain> \
+    --old-kid <id> --new-kid <id> --reason <scheduled|compromise>
+
+The command writes one critical crypto_key_rotated event with the key type,
+old/new key ids and reason. It never reads or prints key material. Run it after
+the new key is active and the rotation's verification has passed.";
+
 /// Parsed `bootstrap-super-admin` arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootstrapArgs {
@@ -68,6 +83,15 @@ pub struct BootstrapArgs {
 pub struct RecoverArgs {
     pub email: String,
     pub password_stdin: bool,
+}
+
+/// Parsed `record-key-rotation` arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyRotationArgs {
+    pub key_type: KeyType,
+    pub old_kid: String,
+    pub new_kid: String,
+    pub reason: RotationReason,
 }
 
 pub fn parse_bootstrap(
@@ -89,6 +113,7 @@ pub fn parse_bootstrap(
             Some(ParsedOption::Username(inline)) => {
                 username = Some(inline_value_or_next(inline, &mut arguments, "--username")?);
             }
+            Some(_) => return Err(ArgError::UnexpectedPositional),
             None => return Err(ArgError::UnexpectedPositional),
         }
     }
@@ -118,6 +143,7 @@ pub fn parse_recover(
             Some(ParsedOption::Username(_)) => {
                 return Err(ArgError::UnknownOption("--username".to_owned()));
             }
+            Some(_) => return Err(ArgError::UnexpectedPositional),
             None => return Err(ArgError::UnexpectedPositional),
         }
     }
@@ -128,12 +154,58 @@ pub fn parse_recover(
     }))
 }
 
+pub fn parse_record_key_rotation(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<ParseOutcome<KeyRotationArgs>, ArgError> {
+    let mut key_type = None;
+    let mut old_kid = None;
+    let mut new_kid = None;
+    let mut reason = None;
+
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match option_of(argument)? {
+            Some(ParsedOption::Help) => return Ok(ParseOutcome::Help(RECORD_KEY_ROTATION_USAGE)),
+            Some(ParsedOption::Password) => return Err(ArgError::PasswordFlagForbidden),
+            Some(ParsedOption::KeyType(inline)) => {
+                let value = inline_value_or_next(inline, &mut arguments, "--key-type")?;
+                key_type =
+                    Some(KeyType::parse(&value).ok_or(ArgError::InvalidValue("--key-type"))?);
+            }
+            Some(ParsedOption::OldKid(inline)) => {
+                old_kid = Some(inline_value_or_next(inline, &mut arguments, "--old-kid")?);
+            }
+            Some(ParsedOption::NewKid(inline)) => {
+                new_kid = Some(inline_value_or_next(inline, &mut arguments, "--new-kid")?);
+            }
+            Some(ParsedOption::Reason(inline)) => {
+                let value = inline_value_or_next(inline, &mut arguments, "--reason")?;
+                reason =
+                    Some(RotationReason::parse(&value).ok_or(ArgError::InvalidValue("--reason"))?);
+            }
+            Some(_) => return Err(ArgError::UnexpectedPositional),
+            None => return Err(ArgError::UnexpectedPositional),
+        }
+    }
+
+    Ok(ParseOutcome::Parsed(KeyRotationArgs {
+        key_type: key_type.ok_or(ArgError::MissingOption("--key-type"))?,
+        old_kid: old_kid.ok_or(ArgError::MissingOption("--old-kid"))?,
+        new_kid: new_kid.ok_or(ArgError::MissingOption("--new-kid"))?,
+        reason: reason.ok_or(ArgError::MissingOption("--reason"))?,
+    }))
+}
+
 enum ParsedOption {
     Help,
     Password,
     PasswordStdin,
     Email(Option<String>),
     Username(Option<String>),
+    KeyType(Option<String>),
+    OldKid(Option<String>),
+    NewKid(Option<String>),
+    Reason(Option<String>),
 }
 
 /// Classify one argument. `None` means a bare positional argument, whose text
@@ -159,6 +231,10 @@ fn option_of(argument: String) -> Result<Option<ParsedOption>, ArgError> {
         }
         ("--email", inline) => ParsedOption::Email(inline),
         ("--username", inline) => ParsedOption::Username(inline),
+        ("--key-type", inline) => ParsedOption::KeyType(inline),
+        ("--old-kid", inline) => ParsedOption::OldKid(inline),
+        ("--new-kid", inline) => ParsedOption::NewKid(inline),
+        ("--reason", inline) => ParsedOption::Reason(inline),
         _ => return Err(ArgError::UnknownOption(name.to_owned())),
     };
 
@@ -199,6 +275,10 @@ mod tests {
         parse_recover(arguments.iter().map(|argument| (*argument).to_owned()))
     }
 
+    fn key_rotation(arguments: &[&str]) -> Result<ParseOutcome<KeyRotationArgs>, ArgError> {
+        parse_record_key_rotation(arguments.iter().map(|argument| (*argument).to_owned()))
+    }
+
     #[test]
     fn bootstrap_accepts_separate_and_inline_values() {
         assert_eq!(
@@ -235,6 +315,93 @@ mod tests {
         assert_eq!(
             recover(&["--email", "ops@example.com", "--username", "ops.admin"]),
             Err(ArgError::UnknownOption("--username".to_owned()))
+        );
+    }
+
+    #[test]
+    fn key_rotation_accepts_separate_and_inline_values() {
+        assert_eq!(
+            key_rotation(&[
+                "--key-type",
+                "jwt",
+                "--old-kid",
+                "prod-2026-11",
+                "--new-kid",
+                "prod-2027-01",
+                "--reason",
+                "scheduled",
+            ]),
+            Ok(ParseOutcome::Parsed(KeyRotationArgs {
+                key_type: KeyType::Jwt,
+                old_kid: "prod-2026-11".to_owned(),
+                new_kid: "prod-2027-01".to_owned(),
+                reason: RotationReason::Scheduled,
+            }))
+        );
+        assert_eq!(
+            key_rotation(&[
+                "--key-type=audit_chain",
+                "--old-kid=audit-2026-11",
+                "--new-kid=audit-2027-01",
+                "--reason=compromise",
+            ]),
+            Ok(ParseOutcome::Parsed(KeyRotationArgs {
+                key_type: KeyType::AuditChain,
+                old_kid: "audit-2026-11".to_owned(),
+                new_kid: "audit-2027-01".to_owned(),
+                reason: RotationReason::Compromise,
+            }))
+        );
+    }
+
+    #[test]
+    fn key_rotation_rejects_unknown_values_without_echoing_them() {
+        let error = key_rotation(&[
+            "--key-type",
+            "hmac",
+            "--old-kid",
+            "a",
+            "--new-kid",
+            "b",
+            "--reason",
+            "scheduled",
+        ])
+        .expect_err("key type");
+        assert_eq!(error, ArgError::InvalidValue("--key-type"));
+        assert!(!error.to_string().contains("hmac"));
+
+        let error = key_rotation(&[
+            "--key-type",
+            "jwt",
+            "--old-kid",
+            "a",
+            "--new-kid",
+            "b",
+            "--reason",
+            "because",
+        ])
+        .expect_err("reason");
+        assert_eq!(error, ArgError::InvalidValue("--reason"));
+        assert!(!error.to_string().contains("because"));
+    }
+
+    #[test]
+    fn key_rotation_requires_every_option() {
+        assert_eq!(
+            key_rotation(&[]),
+            Err(ArgError::MissingOption("--key-type"))
+        );
+        assert_eq!(
+            key_rotation(&["--key-type", "jwt"]),
+            Err(ArgError::MissingOption("--old-kid"))
+        );
+        assert_eq!(
+            key_rotation(&["--key-type", "jwt", "--old-kid", "a"]),
+            Err(ArgError::MissingOption("--new-kid"))
+        );
+        assert_eq!(
+            key_rotation(&["--key-type", "jwt", "--old-kid", "a", "--new-kid", "b"]),
+            Err(ArgError::MissingOption("--reason"))
         );
     }
 

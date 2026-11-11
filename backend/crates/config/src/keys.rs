@@ -12,6 +12,8 @@ pub struct JwtConfig {
     pub audience: String,
     pub kid: String,
     pub signing_key: JwtSigningKey,
+    /// Key id of the predecessor that remains valid during rotation.
+    pub previous_kid: Option<String>,
     /// Public key for tokens signed before the most recent rotation.
     pub previous_verification_key: Option<JwtVerificationKey>,
 }
@@ -96,6 +98,9 @@ impl SecurityConfig {
         let signing_key = JwtSigningKey::from_pem(signing_pem.expose_secret())
             .map_err(|_| ConfigError::Invalid("JWT_EDDSA_PRIVATE_KEY"))?;
 
+        let previous_kid = lookup("JWT_EDDSA_PREVIOUS_KID")
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
         let previous_verification_key = optional_secret(
             lookup,
             "JWT_EDDSA_PREVIOUS_PUBLIC_KEY",
@@ -106,6 +111,13 @@ impl SecurityConfig {
                 .map_err(|_| ConfigError::Invalid("JWT_EDDSA_PREVIOUS_PUBLIC_KEY"))
         })
         .transpose()?;
+
+        if previous_kid.is_some() != previous_verification_key.is_some() {
+            return Err(ConfigError::Invalid("JWT_EDDSA_PREVIOUS_KID"));
+        }
+        if previous_kid.as_deref() == Some(kid.as_str()) {
+            return Err(ConfigError::Invalid("JWT_EDDSA_PREVIOUS_KID"));
+        }
 
         let refresh_current = hmac_key(
             lookup,
@@ -127,6 +139,7 @@ impl SecurityConfig {
                 audience,
                 kid,
                 signing_key,
+                previous_kid,
                 previous_verification_key,
             },
             refresh_derivation: RotationKeys {

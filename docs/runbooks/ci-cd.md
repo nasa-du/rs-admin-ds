@@ -241,3 +241,33 @@ rollback outcome and the migration files between the previous and released
 commits. Keep the last 10 release records and image tags for rollback
 (ADR-0008 §9.6). The GitHub Actions run, its `release-record` artifact and the
 step summary are the deployment log: link the run from the release ticket.
+
+## 7. Verification
+
+After every release or rollback:
+
+```sh
+# 1. The record exists and says what the workflow summary says.
+latest="$(find "${RELEASE_STATE_DIR:-/var/lib/rs-admin/releases}" \
+  -maxdepth 1 -name '*.json' | sort | tail -n 1)"
+jq '{mode, result, failure_stage, requested_tag, previous_tag, ready_seconds,
+     smoke, rollback}' "$latest"
+
+# 2. The deployed state points at the intended tag and images.
+cat "${RELEASE_STATE_DIR:-/var/lib/rs-admin/releases}/deployed.env"
+
+# 3. Readiness and the public edge.
+docker compose -f deploy/compose.yaml exec api \
+  curl -fsS http://127.0.0.1:8080/health/ready
+curl --cacert <CA> https://admin.example.com/                  # 200
+curl --cacert <CA> https://api.example.com/api/v1/auth/me       # 401 problem+json
+
+# 4. The database is at the migration version the release expects.
+docker compose exec db psql -U rs_admin -d rs_admin -tAc \
+  "SELECT MAX(version), COUNT(*) FILTER (WHERE NOT success) FROM _sqlx_migrations"
+```
+
+For a rollback, additionally confirm `deployed.env` still names the previous
+tag, the API image in `deploy/.env` matches it, and `/health/ready` is `200`.
+`./scripts/tests/release.sh` is the offline regression seam for the release,
+dry-run and rollback state machine; it must pass in CI.

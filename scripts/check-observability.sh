@@ -203,6 +203,25 @@ required_alerts=(
     CertificateExpiry
 )
 
+# Most alerts land on their same-named section of alerting.md. Backup, archive
+# and certificate alerts link directly to the runbook that owns the procedure.
+declare -A runbook_file=(
+    [BackupStale]="docs/runbooks/backup-restore.md"
+    [PgArchiveFailure]="docs/runbooks/backup-restore.md"
+    [CertificateExpiry]="docs/runbooks/certificate-renewal.md"
+)
+declare -A runbook_anchor=(
+    [BackupStale]="6-alert-response"
+    [PgArchiveFailure]="6-alert-response"
+    [CertificateExpiry]="certificateexpiry"
+)
+declare -A runbook_heading=(
+    [BackupStale]='^## 6\. Alert response$'
+    [PgArchiveFailure]='^## 6\. Alert response$'
+    [CertificateExpiry]='^## CertificateExpiry$'
+)
+runbook_base="https://github.com/nasa-du/rs-admin-ds/blob/main/"
+
 declare -A seen=()
 rule_count=0
 while IFS='|' read -r name has_severity runbook_url; do
@@ -220,14 +239,20 @@ while IFS='|' read -r name has_severity runbook_url; do
         fail "alert $name has a runbook link"
         continue
     fi
-    expected_anchor="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')"
-    actual_anchor="${runbook_url##*#}"
-    if [[ "$actual_anchor" != "$expected_anchor" ]]; then
-        fail "alert $name links to its own runbook anchor (got #$actual_anchor)"
-    elif ! grep -Eqi "^## ${name}$" "$runbook"; then
-        fail "alert $name has a $runbook section"
+
+    expected_file="${runbook_file[$name]:-$runbook}"
+    expected_anchor="${runbook_anchor[$name]:-$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')}"
+    expected_heading="${runbook_heading[$name]:-^## ${name}$}"
+    expected_url="${runbook_base}${expected_file}#${expected_anchor}"
+
+    if [[ "$runbook_url" != "$expected_url" ]]; then
+        fail "alert $name links to $expected_url (got $runbook_url)"
+    elif [[ ! -f "$expected_file" ]]; then
+        fail "alert $name has a $expected_file runbook"
+    elif ! grep -Eq "$expected_heading" "$expected_file"; then
+        fail "alert $name has a $expected_file#$expected_anchor section"
     else
-        pass "alert $name links to its own runbook anchor"
+        pass "alert $name links to its own runbook section"
     fi
 done < <(
     awk '
@@ -277,6 +302,15 @@ if grep -Eqi '^## ExternalUptime$' "$runbook"; then
 else
     fail "ExternalUptime has a provider-owned runbook section"
 fi
+if grep -Eqi '^## ExternalUptime$' docs/runbooks/certificate-renewal.md; then
+    pass "ExternalUptime links to the certificate and uptime runbook"
+else
+    fail "ExternalUptime links to the certificate and uptime runbook"
+fi
+expect_file \
+    "the alert catalog points ExternalUptime at the certificate runbook" \
+    "$rules_file" \
+    'certificate-renewal\.md#externaluptime'
 
 expect_file "critical alerts are marked critical" "$rules_file" 'severity: critical'
 expect_file "warning alerts are marked warning" "$rules_file" 'severity: warning'

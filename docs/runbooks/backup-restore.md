@@ -304,3 +304,40 @@ the node_exporter textfile collector alongside the backup metric.
 
 Every alert links to this runbook. Record the drill/backup outcome in the
 operations log and keep the last four quarterly drill records.
+
+## 7. Verification
+
+Use these checks after a backup, restore drill or actual restore:
+
+```sh
+# 1. The repository and WAL archive are current.
+cd deploy
+docker compose --profile local-db --profile tools run --rm \
+    --entrypoint sh backup -c \
+    '. /usr/local/bin/rs-admin-pgbackrest-env; pgbackrest --stanza=rs-admin check'
+docker compose --profile local-db --profile tools run --rm \
+    --entrypoint sh backup -c \
+    '. /usr/local/bin/rs-admin-pgbackrest-env; pgbackrest --stanza=rs-admin info --output=json' |
+    jq '.[0].backup[-1] | {label, type, timestamp}'
+
+# 2. The backup age metric is fresh and the attempt succeeded.
+grep -E 'pgbackrest_backup_(last_success_timestamp|last_attempt_success)' \
+    "${RS_ADMIN_METRICS_DIR:-/var/lib/rs-admin/metrics}/rs-admin-backup.prom"
+
+# 3. The newest drill record succeeded and met the RTO.
+latest="$(find "${RESTORE_DRILL_STATE_DIR:-/var/lib/rs-admin/restore-drills}" \
+    -name '*.json' | sort | tail -n 1)"
+jq '{result, rto_seconds, verification}' "$latest"
+
+# 4. The live database still verifies (after a restore or maintenance change).
+docker compose --profile tools run --rm --no-deps \
+    --entrypoint /usr/local/bin/rs-admin-verify-audit-chain api
+
+# 5. The scheduled timers are armed and their last runs succeeded.
+systemctl list-timers 'rs-admin-*'
+systemctl status rs-admin-backup.timer rs-admin-maintenance.timer rs-admin-restore-drill.timer
+```
+
+The `BackupStale` and `PgArchiveFailure` alerts must be resolved after the
+verification. A drill record with `rto_seconds > 7200` is an incident, not a
+pass, even when `result` is `success`.

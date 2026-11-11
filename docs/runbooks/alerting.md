@@ -2,7 +2,12 @@
 
 This runbook covers every alert in `deploy/observability/prometheus/rules/rs-admin.yml`.
 Each Prometheus rule carries the anchor of its section as `runbook_url`, so the
-notification always links to the matching procedure.
+notification always links to the matching procedure. Backup, archive and
+certificate alerts link directly to the dedicated runbooks
+([backup-restore.md](./backup-restore.md) and
+[certificate-renewal.md](./certificate-renewal.md)); their sections below are
+the quick triage summary. See [README.md](./README.md) for the full runbook
+index.
 
 ## Notification path
 
@@ -185,13 +190,11 @@ closed when the audit chain cannot be written.
 reaching the pgBackRest repository and the RPO is at risk.
 
 1. Check `docker compose logs db | grep archive` and the backup container
-   output.
-2. Verify S3 credentials, endpoint reachability and the repository cipher
-   pass. A failed push retries and retains segments in `pg_wal`.
-3. Check disk space: a full `pg_wal` eventually stops the database.
-4. Do not delete WAL files manually. Restore archiving and let PostgreSQL
-   drain the queue.
-5. Run `pgbackrest --stanza=rs-admin check` and a full backup once fixed.
+   output. Verify S3 credentials, endpoint reachability and the repository
+   cipher pass. A failed push retries and retains segments in `pg_wal`.
+2. Check disk space; a full `pg_wal` eventually stops the database. Do not
+   delete WAL files manually.
+3. Full procedure: [backup-restore.md](./backup-restore.md#3-daily-backup).
 
 ## PgDown
 
@@ -207,14 +210,12 @@ reaching the pgBackRest repository and the RPO is at risk.
 
 **Meaning:** no successful full backup in 26 hours, or the metric is absent.
 
-1. Inspect the most recent `rs-admin-backup` systemd job and its logs.
-2. Run the backup manually:
+1. Inspect the most recent `rs-admin-backup` systemd job and its logs. Run the
+   backup manually:
    `docker compose --profile local-db --profile tools run --rm backup`.
-3. Check the textfile at `$RS_ADMIN_METRICS_DIR/rs-admin-backup.prom` and the
-   node_exporter textfile collector (the merge sidecar copies it every
-   15 seconds).
-4. If pgBackRest fails, check repository credentials, S3 reachability and the
-   cipher pass. Never delete a repository to "fix" it.
+2. Check `$RS_ADMIN_METRICS_DIR/rs-admin-backup.prom` and the node_exporter
+   textfile collector. Never delete a repository to "fix" it.
+3. Full procedure: [backup-restore.md](./backup-restore.md#6-alert-response).
 
 ## DiskSpace
 
@@ -236,15 +237,11 @@ expires in less than 14 days (warning) or 7 days (critical), or the probe
 itself cannot read the certificate.
 
 1. If `probe_success{job="blackbox-tls"}` is 0, check that
-   `blackbox_exporter` can reach `https://gateway:8443/` over the edge
-   network and that the gateway TLS listener is healthy. This is a warning,
-   not proof of expiry.
-2. Check the certbot systemd timer and ACME challenge path.
-3. Confirm DNS/port 80 reachability and the certificate SANs for both hosts.
-4. Renew, then reload the gateway:
-   `docker compose -f deploy/compose.yaml exec gateway nginx -s reload`.
-5. Verify the new notAfter with `openssl s_client` against the public hosts and
-   confirm `probe_ssl_earliest_cert_expiry` jumps.
+   `blackbox_exporter` can reach `https://gateway:8443/` over the edge network
+   and that the gateway TLS listener is healthy. This is a warning, not proof
+   of expiry. Check the certbot timer and ACME challenge path.
+2. Full renewal, reload and SAN verification:
+   [certificate-renewal.md](./certificate-renewal.md#certificateexpiry).
 
 ## ExternalUptime
 
@@ -252,15 +249,12 @@ itself cannot read the certificate.
 unavailable. This alert is owned by the provider because it must fire when this
 host and Prometheus are down.
 
-1. Check the provider's status page and the failing probe location.
-2. Check DNS, the gateway container and host reachability.
-3. Correlate with `ApiDown`, `PgDown` and host metrics if Prometheus is still
-   running.
-4. If the host is lost, follow the restore procedure in
-   [`backup-restore.md`](./backup-restore.md) and update the provider only
-   after the SPA returns 200.
-5. Verify the provider is configured for at least two regions and that its
-   notification channel is independent of this host.
+1. Check the provider's status page and the failing probe location. Check DNS,
+   the gateway container and host reachability; correlate with `ApiDown`,
+   `PgDown` and host metrics if Prometheus is still running.
+2. If the host is lost, follow [backup-restore.md](./backup-restore.md#41-actual-restore-disaster-recovery)
+   and update the provider only after the SPA returns 200.
+3. Provider checklist: [certificate-renewal.md](./certificate-renewal.md#externaluptime).
 
 ## Stack operations
 
@@ -318,3 +312,29 @@ Also rely on the automated checks:
   username, email, raw path or secret.
 - `scripts/check-observability.sh` asserts the 14-day retention, the redaction
   stages, alert runbook links, dashboards and pinned images.
+
+## Verification
+
+After changing the alert catalog, notification path or dashboards:
+
+```sh
+# 1. Every rule compiles and every runbook link resolves to its expected file
+#    and section (most to this file, backup/certificate alerts to theirs).
+./scripts/check-observability.sh
+
+# 2. Prometheus, Alertmanager, Loki and Promtail accept their configuration.
+docker compose -f deploy/compose.observability.yaml exec prometheus \
+  promtool check rules /etc/prometheus/rules/rs-admin.yml
+docker compose -f deploy/compose.observability.yaml exec alertmanager \
+  amtool check-config /etc/alertmanager/alertmanager.yml
+
+# 3. A test alert reaches the configured channel from the production stack.
+docker compose -f deploy/compose.observability.yaml exec alertmanager \
+  amtool --alertmanager.url=http://localhost:9093 alert add \
+  alertname=RunbookVerification severity=warning
+```
+
+Confirm the notification contains the environment, alert name, instance,
+start time, summary and the runbook link, and no credentials or raw labels. If
+delivery is intentionally disabled (`alert_webhook_url` is empty), record that
+in the verification note and rely on the external uptime provider.

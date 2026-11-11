@@ -70,6 +70,7 @@ pub fn security_config() -> SecurityConfig {
             audience: AUDIENCE.to_owned(),
             kid: KID.to_owned(),
             signing_key: signing_key(),
+            previous_kid: None,
             previous_verification_key: None,
         },
         refresh_derivation: RotationKeys {

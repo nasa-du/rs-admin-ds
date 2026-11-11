@@ -242,6 +242,13 @@
 
 ## Amendments
 
+- 2026-11-11：[PG18 升级演练 + 运维 runbook 全集](https://github.com/nasa-du/rs-admin-ds/issues/52) 落实 §7.4 与 §11.4：
+  - 新增升级维护镜像 `deploy/db/upgrade/Dockerfile`：把生产 `DB_IMAGE` 的 PG18 `/usr/local` 树复制到 `/opt/pg18` 作为 `--old-bindir`，目标版本为 `postgres:19rc1-alpine`（PG19 GA 后改成最新 `postgres:19.x-alpine`）。旧树的 `pg_config` 用包装脚本返回 `/opt/pg18` 前缀，避免 `pg_upgrade` 误查新版本的库目录。
+  - 新增 `scripts/upgrade-drill.sh`：从最近 pgBackRest 备份恢复到临时 PG18 实例并先跑一次审计链/迁移/关键行验证；确认干净关闭；用目标版本 `initdb` 初始化空集群（沿用源的 encoding/locale、`--username` 与应用超管一致，`pg_upgrade` 本身不运行 `initdb`）；执行 `pg_upgrade --check --copy`；重新初始化并执行真正的 `pg_upgrade --copy`；启动 PG19、运行 `ANALYZE` 与 `pg_upgrade` 生成的 `update_extensions.sql`，再验迁移版本、关键行数、扩展与审计链。默认且只支持 `--copy`，不支持 `--link`；各阶段耗时与两次验证结果写入 `UPGRADE_DRILL_STATE_DIR`。2026-11-11 在开发主机用 30.9 MB、1,334 文件的备份实测：restore 6s、initdb 3s、check 1s、copy 4s、总计 18s；该表只作为方法学基线，生产窗口必须以生产数据重跑。
+  - 本修订收紧规格 §11.4 的 `--link` 备选：大版本升级不使用 `--link`，因为删除旧数据目录会失去快速回退路径；磁盘不足时扩容数据卷或改用逻辑迁移（`pg_dumpall`/`pg_restore`），并在维护窗口前把 2 倍数据量作为预检门槛。
+  - 维护镜像同时安装 `pgbackrest=2.58.0-r0` 并记录其版本；演练不写生产仓库（`stanza-upgrade`/备份会把临时集群的 system id 写入仓库）。生产切换到 PG19 后必须把 `deploy/db/pgbackrest.conf` 的 `pg1-path` 改为 `/var/lib/postgresql/19/docker`，依次执行 `stanza-upgrade`、`check` 与首次全量备份，再解除发布冻结；旧 PG18 备份保留 30 天作为回退链。
+  - runbook 全集覆盖 §10.13 的八项：`first-deploy.md`、`ci-cd.md`、`secret-rotation.md`、`backup-restore.md`、`postgres-upgrade.md`、`alerting.md`、`break-glass.md`、`certificate-renewal.md`，每条包含 Verification 段。备份/归档告警的 `runbook_url` 指向 `backup-restore.md#6-alert-response`，证书告警指向 `certificate-renewal.md#certificateexpiry`，其余指向 `alerting.md` 的同名段。
+  - API 镜像增加 `rs-admin-bootstrap-super-admin`、`rs-admin-recover-super-admin` 与 `rs-admin-record-key-rotation`，使首次部署、break-glass 与密钥轮换审计只需一次性容器，不要求主机安装 Rust 工具链。`record-key-rotation` 写 critical 级 `crypto_key_rotated` 事件，details 为 `key_type`、`old_kid`、`new_kid`、`reason`。
 - 2026-11-10：[定时运维：备份/WAL/恢复演练 + 维护清理任务](https://github.com/nasa-du/rs-admin-ds/issues/50) 落实 §5.5–§5.7、§7，并取代 #48 修订中「`archive_mode` 暂为 `off`」的过渡状态：
   - `db` 镜像固定为 `postgres:18.6-alpine` + `pgbackrest=2.58.0-r0`。PostgreSQL 启用 `archive_mode=on`、`archive_timeout=60s`，`archive_command` 先 source 读取挂载凭据的 `rs-admin-pgbackrest-env`，再执行 `pgbackrest --stanza=rs-admin archive-push %p`。
   - `db` 额外加入仅用于出站的 `storage` 网络（172.30.0.0/16），以便把 WAL 与备份写入 S3 兼容仓库；它不发布端口，生产 HBA 仍只接受 `data` 子网。`backup` 一次性任务只加入该网络。

@@ -120,6 +120,9 @@ jobs:
       - name: Test release and rollback script
         run: ./scripts/tests/release.sh
 
+      - name: Test PostgreSQL upgrade drill
+        run: ./scripts/tests/upgrade-drill.sh
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -142,3 +145,16 @@ jobs:
           push: false
           cache-from: type=gha,scope=db
           cache-to: type=gha,mode=max,scope=db
+
+      - name: Build PostgreSQL upgrade maintenance image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy/db
+          file: ./deploy/db/upgrade/Dockerfile
+          push: false
+          build-args: |
+            PG_OLD_IMAGE=postgres:18.6-alpine
+            PG_NEW_IMAGE=postgres:19rc1-alpine
+            PGBACKREST_VERSION=2.58.0-r0
+          cache-from: type=gha,scope=pg-upgrade
+          cache-to: type=gha,mode=max,scope=pg-upgrade

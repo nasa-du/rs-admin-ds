@@ -5,23 +5,10 @@ mod support;
 use chrono::{Duration, Utc};
 use rs_admin_audit::{AuditAction, AuditActor, AuditEvent, AuditResult, verify_chain};
 use rs_admin_cli::{CliError, MaintenanceStatus, run_maintenance_at};
-use rs_admin_security::AuditKeyRing;
 use rs_admin_store::maintenance::{MaintenancePolicy, advisory_unlock, try_advisory_lock};
 use sqlx::PgPool;
-use support::{NewUser, insert_session, insert_user, prepare_catalog, services};
+use support::{NewUser, audit_keyring, insert_session, insert_user, prepare_catalog, services};
 use uuid::Uuid;
-
-fn keyring() -> AuditKeyRing {
-    AuditKeyRing::from_json(
-        &format!(
-            "{{\"{}\":\"{}\"}}",
-            support::AUDIT_KEY_ID,
-            support::AUDIT_KEY_B64
-        ),
-        support::AUDIT_KEY_ID,
-    )
-    .expect("keyring")
-}
 
 fn audit_event() -> AuditEvent {
     AuditEvent::builder(
@@ -123,7 +110,7 @@ async fn maintenance_cleans_expired_state_and_writes_the_purge_anchor(pool: PgPo
     assert_eq!(head.0, 4);
     assert_eq!(head.1, rows[0].1);
 
-    verify_chain(&pool, &keyring())
+    verify_chain(&pool, &audit_keyring())
         .await
         .expect("the post-purge chain verifies");
 }
@@ -236,7 +223,7 @@ async fn batched_purges_keep_the_chain_verifiable(pool: PgPool) {
             run.outcome.audit.count, 1,
             "one bounded batch is removed per run"
         );
-        verify_chain(&pool, &keyring())
+        verify_chain(&pool, &audit_keyring())
             .await
             .expect("every intermediate chain state verifies");
     }

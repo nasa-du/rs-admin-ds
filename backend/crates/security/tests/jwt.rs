@@ -7,7 +7,7 @@ use ed25519_dalek::pkcs8::EncodePrivateKey;
 use ed25519_dalek::pkcs8::spki::der::pem::LineEnding;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use rs_admin_security::{
-    AccessTokenClaims, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtError, JwtIssuer, JwtSigningKey,
+    AccessTokenClaims, JWT_ACCESS_TOKEN_TTL_SECONDS, JwtError, JwtIssuer, JwtSigningKey, KeyError,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -26,6 +26,26 @@ fn signing_key() -> JwtSigningKey {
 
 fn issuer() -> JwtIssuer {
     JwtIssuer::new(ISSUER, AUDIENCE, KID, &signing_key()).expect("issuer")
+}
+
+fn other_signing_key() -> JwtSigningKey {
+    let pem = SigningKey::from_bytes(&[9u8; 32])
+        .to_pkcs8_pem(LineEnding::LF)
+        .expect("PKCS#8")
+        .to_string();
+    JwtSigningKey::from_pem(&pem).expect("signing key")
+}
+
+fn issuer_with_previous(previous_kid: &str, previous_key: &JwtSigningKey) -> JwtIssuer {
+    JwtIssuer::with_previous(
+        ISSUER,
+        AUDIENCE,
+        KID,
+        &signing_key(),
+        Some(previous_kid),
+        Some(&previous_key.verification_key().expect("verification key")),
+    )
+    .expect("issuer")
 }
 
 fn claims(issued_at: i64) -> AccessTokenClaims {
@@ -79,6 +99,62 @@ fn unknown_kids_are_rejected() {
     let token = other.sign(&claims(now())).expect("sign");
 
     assert!(matches!(issuer().verify(&token), Err(JwtError::UnknownKid)));
+}
+
+#[test]
+fn previous_kid_tokens_verify_during_rotation() {
+    let old_key = other_signing_key();
+    let old = JwtIssuer::new(ISSUER, AUDIENCE, "old-kid", &old_key).expect("old issuer");
+    let old_token = old.sign(&claims(now())).expect("sign");
+
+    let current = issuer_with_previous("old-kid", &old_key);
+    assert!(current.verify(&old_token).is_ok());
+
+    let current_token = current.sign(&claims(now())).expect("sign");
+    assert!(current.verify(&current_token).is_ok());
+}
+
+#[test]
+fn a_previous_kid_signed_with_the_wrong_key_is_rejected() {
+    let old_key = other_signing_key();
+    let attacker_key = JwtSigningKey::from_pem(
+        &SigningKey::from_bytes(&[11u8; 32])
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("PKCS#8"),
+    )
+    .expect("attacker key");
+    let attacker = JwtIssuer::new(ISSUER, AUDIENCE, "old-kid", &attacker_key).expect("issuer");
+    let token = attacker.sign(&claims(now())).expect("sign");
+
+    let current = issuer_with_previous("old-kid", &old_key);
+    assert!(matches!(
+        current.verify(&token),
+        Err(JwtError::InvalidToken)
+    ));
+}
+
+#[test]
+fn unknown_kids_are_still_rejected_during_rotation() {
+    let old_key = other_signing_key();
+    let other = JwtIssuer::new(ISSUER, AUDIENCE, "unknown-kid", &old_key).expect("issuer");
+    let token = other.sign(&claims(now())).expect("sign");
+
+    let current = issuer_with_previous("old-kid", &old_key);
+    assert!(matches!(current.verify(&token), Err(JwtError::UnknownKid)));
+}
+
+#[test]
+fn a_previous_kid_equal_to_the_current_kid_is_invalid() {
+    let old_key = other_signing_key();
+    let result = JwtIssuer::with_previous(
+        ISSUER,
+        AUDIENCE,
+        KID,
+        &signing_key(),
+        Some(KID),
+        Some(&old_key.verification_key().expect("verification key")),
+    );
+    assert!(matches!(result, Err(KeyError::InvalidJwtConfiguration)));
 }
 
 #[test]

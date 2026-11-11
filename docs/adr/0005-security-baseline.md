@@ -267,6 +267,11 @@
 
 ## Amendments
 
+- 2026-11-11：[PG18 升级演练 + 运维 runbook 全集](https://github.com/nasa-du/rs-admin-ds/issues/52) 落实 §8.4 的 JWT publish-before-use 轮换：
+  - 新增非敏感配置 `JWT_EDDSA_PREVIOUS_KID`，与既有的可选 `JWT_EDDSA_PREVIOUS_PUBLIC_KEY`/`_FILE` 成对出现；只配置其中一个会使启动校验失败，且 previous kid 不得等于当前 kid。
+  - 验证器只接受当前 `kid`（当前签名公钥）或 `JWT_EDDSA_PREVIOUS_KID`（previous 公钥），其他 `kid` 仍返回 `UnknownKid`；签名仍以 EdDSA 与本地可信密钥集为准。
+  - 轮换分三阶段：publish（旧签名钥 + 新公钥作为 previous，等待 ≥1 小时）、switch（新签名钥 + 旧公钥作为 previous，等待 ≥ access TTL + 60 秒）、retire（移除 previous）。`deploy/compose.rotation-jwt.yaml` 只在重叠窗口挂载 previous 公钥。
+  - 每次轮换由 `rs-admin-record-key-rotation` 写 critical 级 `crypto_key_rotated`，details 为 `key_type`、`old_kid`、`new_kid`、`reason`。
 - 2026-11-07：[审计日志查询 UI](https://github.com/nasa-du/rs-admin-ds/issues/11) 修订 §6.2/§6.3：
   - `audit_logs` 增加 `target_label text`（nullable）。写入时取事件发生后的名称快照：`user` 目标写 username，`role` 目标写 name，其他目标类型为 null；`user_updated` 用新 username，`role_updated` 用新 name。该列纳入 §6.3.3 的 JCS 行规范化与 HMAC 链（`row` 包含 `target_label`）。
   - `target_type` / `target_id` / `target_label` 的事件映射：

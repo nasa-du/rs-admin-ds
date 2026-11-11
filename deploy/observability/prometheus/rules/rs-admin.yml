@@ -168,7 +168,7 @@ groups:
         annotations:
           summary: PostgreSQL WAL archiving is failing.
           description: The RPO of 15 minutes is at risk. Check pgBackRest credentials, the S3-compatible repository and free space in pg_wal.
-          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#pgarchivefailure
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/backup-restore.md#6-alert-response
 
       - alert: PgDown
         expr: pg_up == 0
@@ -191,7 +191,7 @@ groups:
         annotations:
           summary: No successful full backup in the last 26 hours.
           description: The daily backup timer or pgBackRest repository is failing. Run the backup job and verify the textfile metric reaches node_exporter.
-          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#backupstale
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/backup-restore.md#6-alert-response
 
       - alert: DiskSpace
         expr: |
@@ -238,7 +238,7 @@ groups:
         annotations:
           summary: The gateway TLS certificate is close to expiry or the probe fails.
           description: certbot renewal is failing, the deployed certificate was not replaced, or blackbox_exporter cannot read the gateway certificate. Renew and reload the gateway before the critical threshold.
-          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#certificateexpiry
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/certificate-renewal.md#certificateexpiry
 
       - alert: CertificateExpiry
         expr: (min(probe_ssl_earliest_cert_expiry{job="blackbox-tls"}) - time()) / 86400 < 7
@@ -248,10 +248,10 @@ groups:
         annotations:
           summary: The gateway TLS certificate expires in less than 7 days.
           description: Users will see TLS errors when the certificate expires. Replace the certificate and reload the gateway now.
-          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/alerting.md#certificateexpiry
+          runbook_url: https://github.com/nasa-du/rs-admin-ds/blob/main/docs/runbooks/certificate-renewal.md#certificateexpiry
 
       # ExternalUptime is provider-owned: Healthchecks.io/UptimeRobot/Better
       # Stack must alert independently because a rule on this host cannot fire
       # when the host or Prometheus is down. See
       # deploy/observability/uptime/README.md and
-      # docs/runbooks/alerting.md#externaluptime.
+      # docs/runbooks/certificate-renewal.md#externaluptime.

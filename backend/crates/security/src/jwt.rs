@@ -74,6 +74,8 @@ pub struct JwtIssuer {
     kid: String,
     signing_key: JwtSigningKey,
     verification_key: JwtVerificationKey,
+    previous_kid: Option<String>,
+    previous_verification_key: Option<JwtVerificationKey>,
 }
 
 impl JwtIssuer {
@@ -85,7 +87,26 @@ impl JwtIssuer {
         kid: &str,
         signing_key: &JwtSigningKey,
     ) -> Result<Self, KeyError> {
+        Self::with_previous(issuer, audience, kid, signing_key, None, None)
+    }
+
+    /// Build an issuer that also verifies tokens signed with the predecessor
+    /// key during a publish-before-use rotation.
+    pub fn with_previous(
+        issuer: &str,
+        audience: &str,
+        kid: &str,
+        signing_key: &JwtSigningKey,
+        previous_kid: Option<&str>,
+        previous_verification_key: Option<&JwtVerificationKey>,
+    ) -> Result<Self, KeyError> {
         if issuer.trim().is_empty() || audience.trim().is_empty() || kid.trim().is_empty() {
+            return Err(KeyError::InvalidJwtConfiguration);
+        }
+        if previous_kid.is_some() != previous_verification_key.is_some() {
+            return Err(KeyError::InvalidJwtConfiguration);
+        }
+        if previous_kid == Some(kid) {
             return Err(KeyError::InvalidJwtConfiguration);
         }
 
@@ -95,6 +116,8 @@ impl JwtIssuer {
             kid: kid.to_owned(),
             signing_key: signing_key.clone(),
             verification_key: signing_key.verification_key()?,
+            previous_kid: previous_kid.map(str::to_owned),
+            previous_verification_key: previous_verification_key.cloned(),
         })
     }
 
@@ -147,11 +170,15 @@ impl JwtIssuer {
         if header.typ.as_deref() != Some(ACCESS_TOKEN_TYPE) {
             return Err(JwtError::InvalidHeader);
         }
-        match header.kid.as_deref() {
-            Some(kid) if kid == self.kid => {}
+        let verification_key = match header.kid.as_deref() {
+            Some(kid) if kid == self.kid => &self.verification_key,
+            Some(kid) if self.previous_kid.as_deref() == Some(kid) => self
+                .previous_verification_key
+                .as_ref()
+                .ok_or(JwtError::UnknownKid)?,
             Some(_) => return Err(JwtError::UnknownKid),
             None => return Err(JwtError::InvalidHeader),
-        }
+        };
 
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.leeway = JWT_LEEWAY_SECONDS;
@@ -164,12 +191,12 @@ impl JwtIssuer {
             .collect();
 
         let TokenData { claims, .. } =
-            decode::<AccessTokenClaims>(token, self.verification_key.decoding_key(), &validation)
+            decode::<AccessTokenClaims>(token, verification_key.decoding_key(), &validation)
                 .map_err(|error| match error.kind() {
-                ErrorKind::ExpiredSignature => JwtError::Expired,
-                ErrorKind::ImmatureSignature => JwtError::NotYetValid,
-                _ => JwtError::InvalidToken,
-            })?;
+                    ErrorKind::ExpiredSignature => JwtError::Expired,
+                    ErrorKind::ImmatureSignature => JwtError::NotYetValid,
+                    _ => JwtError::InvalidToken,
+                })?;
 
         if claims.typ != ACCESS_TOKEN_TYPE
             || claims.iss != self.issuer

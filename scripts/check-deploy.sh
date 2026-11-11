@@ -449,6 +449,208 @@ expect_file "runtime may not mutate audit rows" "deploy/db/grants.sql" 'REVOKE A
 expect_file "runtime may read and advance the chain head" "deploy/db/grants.sql" 'GRANT SELECT, UPDATE ON TABLE audit_chain_head TO rs_admin_runtime'
 expect_file "runtime may read migration state for readiness" "deploy/db/grants.sql" 'GRANT SELECT ON TABLE _sqlx_migrations TO rs_admin_runtime'
 
+# --- Runbooks, drills and upgrade path -------------------------------------
+runbooks=(
+    docs/runbooks/README.md
+    docs/runbooks/first-deploy.md
+    docs/runbooks/ci-cd.md
+    docs/runbooks/secret-rotation.md
+    docs/runbooks/backup-restore.md
+    docs/runbooks/postgres-upgrade.md
+    docs/runbooks/alerting.md
+    docs/runbooks/break-glass.md
+    docs/runbooks/certificate-renewal.md
+)
+for runbook in "${runbooks[@]}"; do
+    if [[ -f "$runbook" ]]; then
+        pass "runbook exists: $runbook"
+    else
+        fail "runbook exists: $runbook"
+    fi
+    if [[ "$runbook" == *README.md ]]; then
+        continue
+    fi
+    expect_file \
+        "runbook has a verification section: $runbook" \
+        "$runbook" \
+        '^#{2,3} .*[Vv]erification'
+done
+
+expect_file \
+    "the runbook index links first deployment" \
+    docs/runbooks/README.md \
+    'first-deploy\.md'
+expect_file \
+    "the runbook index links release and rollback" \
+    docs/runbooks/README.md \
+    'ci-cd\.md'
+expect_file \
+    "the runbook index links secret rotation" \
+    docs/runbooks/README.md \
+    'secret-rotation\.md'
+expect_file \
+    "the runbook index links backup and restore" \
+    docs/runbooks/README.md \
+    'backup-restore\.md'
+expect_file \
+    "the runbook index links the PostgreSQL upgrade" \
+    docs/runbooks/README.md \
+    'postgres-upgrade\.md'
+expect_file \
+    "the runbook index links alert troubleshooting" \
+    docs/runbooks/README.md \
+    'alerting\.md'
+expect_file \
+    "the runbook index links break-glass" \
+    docs/runbooks/README.md \
+    'break-glass\.md'
+expect_file \
+    "the runbook index links certificate renewal" \
+    docs/runbooks/README.md \
+    'certificate-renewal\.md'
+
+expect_file \
+    "the production image stays pinned to PostgreSQL 18.6" \
+    deploy/db/Dockerfile \
+    '^FROM postgres:18\.6-alpine$'
+expect_file \
+    "the upgrade maintenance image defaults to the pinned PG18 source" \
+    deploy/db/upgrade/Dockerfile \
+    '^ARG PG_OLD_IMAGE=postgres:18\.6-alpine$'
+expect_file \
+    "the upgrade maintenance image defaults to the pinned PG19 target" \
+    deploy/db/upgrade/Dockerfile \
+    '^ARG PG_NEW_IMAGE=postgres:19rc1-alpine$'
+expect_file \
+    "the upgrade maintenance image pins pgBackRest" \
+    deploy/db/upgrade/Dockerfile \
+    '^ARG PGBACKREST_VERSION=2\.58\.0-r0$'
+expect_file \
+    "the upgrade maintenance image installs pgBackRest" \
+    deploy/db/upgrade/Dockerfile \
+    'apk add --no-cache.*pgbackrest'
+expect_file \
+    "the upgrade pg_config wrapper relocates the old library directory" \
+    deploy/db/upgrade/pg_config \
+    '--pkglibdir.*/opt/pg18/lib/postgresql'
+expect_file \
+    "the upgrade drill runs pg_upgrade --check with copy mode" \
+    scripts/upgrade-drill.sh \
+    '--check --copy'
+expect_file \
+    "the upgrade drill performs the copy-mode upgrade" \
+    scripts/upgrade-drill.sh \
+    '^    --copy \\$'
+expect_file_absent \
+    "the upgrade drill never uses link mode" \
+    scripts/upgrade-drill.sh \
+    '--link'
+if [[ -x scripts/upgrade-drill.sh ]]; then
+    pass "the upgrade drill is executable"
+else
+    fail "the upgrade drill is executable"
+fi
+expect_file \
+    "the upgrade drill records the measured initdb phase" \
+    scripts/upgrade-drill.sh \
+    '"initdb_seconds"'
+expect_file \
+    "the upgrade drill records the measured check phase" \
+    scripts/upgrade-drill.sh \
+    '"check_seconds"'
+expect_file \
+    "the upgrade drill records the measured upgrade phase" \
+    scripts/upgrade-drill.sh \
+    '"upgrade_seconds"'
+expect_file \
+    "the upgrade drill initializes the target cluster with initdb" \
+    scripts/upgrade-drill.sh \
+    'initdb'
+expect_file \
+    "the upgrade drill uses the application bootstrap role" \
+    scripts/upgrade-drill.sh \
+    '--username="\$postgres_user"'
+expect_file \
+    "the upgrade drill verifies the audit chain before and after" \
+    scripts/upgrade-drill.sh \
+    'rs-admin-verify-audit-chain'
+expect_file \
+    "the upgrade runbook documents the check-then-copy procedure" \
+    docs/runbooks/postgres-upgrade.md \
+    'pg_upgrade --check --copy'
+expect_file \
+    "the upgrade runbook documents the copy-mode production command" \
+    docs/runbooks/postgres-upgrade.md \
+    '--check --copy --username=rs_admin'
+expect_file \
+    "the upgrade runbook documents the rollback path" \
+    docs/runbooks/postgres-upgrade.md \
+    '^## 5\. Rollback path$'
+expect_file \
+    "the upgrade runbook initializes the target with the bootstrap role" \
+    docs/runbooks/postgres-upgrade.md \
+    '--username=rs_admin'
+expect_file \
+    "the maintenance image and runbook agree on the PG19 target" \
+    docs/runbooks/postgres-upgrade.md \
+    'postgres:19rc1-alpine'
+expect_file \
+    "the API image carries the bootstrap CLI" \
+    backend/Dockerfile \
+    'rs-admin-bootstrap-super-admin'
+expect_file \
+    "the API image carries the break-glass CLI" \
+    backend/Dockerfile \
+    'rs-admin-recover-super-admin'
+expect_file \
+    "the API image carries the key-rotation audit CLI" \
+    backend/Dockerfile \
+    'rs-admin-record-key-rotation'
+expect_file \
+    "the refresh rotation override mounts the previous derivation key" \
+    deploy/compose.rotation-refresh.yaml \
+    'refresh_derivation_previous'
+expect_file \
+    "the JWT rotation override mounts the previous public key" \
+    deploy/compose.rotation-jwt.yaml \
+    'jwt_ed25519_previous_public'
+expect_file \
+    "the refresh rotation runbook documents the override" \
+    docs/runbooks/secret-rotation.md \
+    'compose.rotation-refresh.yaml'
+expect_file \
+    "the JWT rotation runbook documents the override" \
+    docs/runbooks/secret-rotation.md \
+    'compose.rotation-jwt.yaml'
+expect_file \
+    "the environment example documents the previous JWT key id" \
+    deploy/.env.example \
+    'JWT_EDDSA_PREVIOUS_KID'
+expect_file \
+    "the secret rotation runbook documents the rotation audit command" \
+    docs/runbooks/secret-rotation.md \
+    'rs-admin-record-key-rotation'
+expect_file \
+    "the environment example records the upgrade drill state directory" \
+    deploy/.env.example \
+    '^UPGRADE_DRILL_STATE_DIR='
+expect_file \
+    "the environment example pins the upgrade target image" \
+    deploy/.env.example \
+    '^PG_UPGRADE_NEW_IMAGE=postgres:19rc1-alpine$'
+expect_file \
+    "the deployment README links the runbook index" \
+    deploy/README.md \
+    'docs/runbooks/README\.md'
+expect_file \
+    "the alerting runbook links the backup runbook" \
+    docs/runbooks/alerting.md \
+    'backup-restore\.md'
+expect_file \
+    "the alerting runbook links the certificate runbook" \
+    docs/runbooks/alerting.md \
+    'certificate-renewal\.md'
+
 # --- Generated development secrets -----------------------------------------
 if command -v openssl >/dev/null 2>&1; then
     secret_dir="$(mktemp -d)"
